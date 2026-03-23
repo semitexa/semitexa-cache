@@ -1,6 +1,6 @@
 {
     "name": "semitexa/cache",
-    "description": "Application-level cache package for Semitexa \u2014 key-value store, tenant namespacing, tag invalidation",
+    "description": "Semitexa Cache - tenant-aware cache store with Redis backing, namespaces, and tag invalidation",
     "version": "1.0.0",
     "type": "semitexa-module",
     "license": "MIT",
