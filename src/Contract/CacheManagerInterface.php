@@ -12,7 +12,7 @@ interface CacheManagerInterface
     public function forget(string $key): void;
     public function flushTags(string ...$tags): int;
     public function flushNamespace(?string $namespace = null): int;
-    public function withNamespace(string $namespace): static;
-    public function withTags(string ...$tags): static;
-    public function scope(CacheScope $scope): static;
+    public function withNamespace(string $namespace): CacheManagerInterface;
+    public function withTags(string ...$tags): CacheManagerInterface;
+    public function scope(CacheScope $scope): CacheManagerInterface;
 }
