@@ -19,31 +19,67 @@ use Semitexa\Cache\Store\RedisCacheStore;
 use Semitexa\Cache\Tag\ArrayTagIndex;
 use Semitexa\Cache\Tag\NullTagIndex;
 use Semitexa\Cache\Tag\RedisTagIndex;
+use Semitexa\Core\Attributes\Config;
 use Semitexa\Core\Attributes\SatisfiesServiceContract;
 
 #[SatisfiesServiceContract(of: CacheManagerInterface::class)]
 final class CacheManager implements CacheManagerInterface
 {
-    private readonly CacheConfig $config;
-    private readonly CacheStoreInterface $store;
-    private readonly TagIndexInterface $tagIndex;
-    private readonly CacheNamespaceResolverInterface $namespaceResolver;
+    #[Config(env: 'CACHE_DRIVER', default: 'array')]
+    protected string $driver;
 
-    public function __construct(
-        ?CacheConfig $config = null,
-        ?CacheStoreInterface $store = null,
-        ?TagIndexInterface $tagIndex = null,
-        ?CacheNamespaceResolverInterface $namespaceResolver = null,
-    ) {
-        $this->config = $config ?? CacheConfig::fromEnvironment();
-        $serializer = new CacheValueSerializer();
-        $this->store = $store ?? $this->createStore($serializer);
-        $this->tagIndex = $tagIndex ?? $this->createTagIndex();
-        $this->namespaceResolver = $namespaceResolver ?? new DefaultCacheNamespaceResolver($this->config);
+    #[Config(env: 'CACHE_PREFIX', default: 'semitexa')]
+    protected string $prefix;
+
+    #[Config(env: 'CACHE_APP', default: 'app')]
+    protected string $app;
+
+    #[Config(env: 'CACHE_ENV', default: 'prod')]
+    protected string $env;
+
+    #[Config(env: 'CACHE_DEFAULT_TTL', default: 300)]
+    protected int $defaultTtl;
+
+    #[Config(env: 'CACHE_ALLOW_FOREVER', default: false)]
+    protected bool $allowForever;
+
+    #[Config(env: 'CACHE_TAGS_ENABLED', default: true)]
+    protected bool $tagsEnabled;
+
+    #[Config(env: 'REDIS_HOST', default: '127.0.0.1')]
+    protected string $redisHost;
+
+    #[Config(env: 'REDIS_PORT', default: 6379)]
+    protected int $redisPort;
+
+    #[Config(env: 'REDIS_SCHEME', default: 'tcp')]
+    protected string $redisScheme;
+
+    #[Config(env: 'REDIS_PASSWORD', default: '')]
+    protected string $redisPassword;
+
+    private ?CacheConfig $config = null;
+    private ?CacheStoreInterface $store = null;
+    private ?TagIndexInterface $tagIndex = null;
+    private ?CacheNamespaceResolverInterface $namespaceResolver = null;
+
+    public static function withDependencies(
+        CacheConfig $config,
+        CacheStoreInterface $store,
+        TagIndexInterface $tagIndex,
+        CacheNamespaceResolverInterface $namespaceResolver,
+    ): self {
+        $manager = new self();
+        $manager->config = $config;
+        $manager->store = $store;
+        $manager->tagIndex = $tagIndex;
+        $manager->namespaceResolver = $namespaceResolver;
+        return $manager;
     }
 
     public function get(string $key, mixed $default = null): mixed
     {
+        $this->boot();
         $resolved = $this->resolveKey($key, '');
         $entry = $this->store->get($resolved);
         return $entry !== null ? $entry->value : $default;
@@ -51,6 +87,7 @@ final class CacheManager implements CacheManagerInterface
 
     public function put(string $key, mixed $value, ?int $ttlSeconds = null, array $tags = []): void
     {
+        $this->boot();
         $this->doPut(namespace: '', scope: CacheScope::Tenant, extraTags: [], key: $key, value: $value, ttlSeconds: $ttlSeconds, tags: $tags);
     }
 
@@ -67,16 +104,19 @@ final class CacheManager implements CacheManagerInterface
 
     public function forget(string $key): void
     {
+        $this->boot();
         $this->doForget(namespace: '', scope: CacheScope::Tenant, key: $key);
     }
 
     public function flushTags(string ...$tags): int
     {
+        $this->boot();
         return $this->doFlushTags(namespace: '', scope: CacheScope::Tenant, tags: $tags);
     }
 
     public function flushNamespace(?string $namespace = null): int
     {
+        $this->boot();
         $ns = $this->namespaceResolver->resolve($namespace ?? '', CacheScope::Tenant);
         return $this->store->clearNamespace($ns);
     }
@@ -125,6 +165,7 @@ final class CacheManager implements CacheManagerInterface
         ?int $ttlSeconds,
         array $tags,
     ): void {
+        $this->boot();
         if ($ttlSeconds !== null && $ttlSeconds < 0) {
             throw new \InvalidArgumentException('TTL must not be negative.');
         }
@@ -156,6 +197,7 @@ final class CacheManager implements CacheManagerInterface
      */
     public function doGet(string $namespace, CacheScope $scope, string $key, mixed $default): mixed
     {
+        $this->boot();
         $resolved = $this->resolveKey($key, $namespace, $scope);
         $entry = $this->store->get($resolved);
         return $entry !== null ? $entry->value : $default;
@@ -166,6 +208,7 @@ final class CacheManager implements CacheManagerInterface
      */
     public function doForget(string $namespace, CacheScope $scope, string $key): void
     {
+        $this->boot();
         $resolved = $this->resolveKey($key, $namespace, $scope);
         $entry = $this->store->get($resolved);
         if ($entry !== null && !$entry->tags->isEmpty() && $this->config->tagsEnabled) {
@@ -180,6 +223,7 @@ final class CacheManager implements CacheManagerInterface
      */
     public function doFlushTags(string $namespace, CacheScope $scope, array $tags): int
     {
+        $this->boot();
         if (!$this->config->tagsEnabled) {
             return 0;
         }
@@ -192,8 +236,62 @@ final class CacheManager implements CacheManagerInterface
      */
     public function doFlushNamespace(string $namespace, CacheScope $scope): int
     {
+        $this->boot();
         $ns = $this->namespaceResolver->resolve($namespace, $scope);
         return $this->store->clearNamespace($ns);
+    }
+
+    private function boot(): void
+    {
+        if ($this->config === null) {
+            $this->config = $this->buildConfig();
+        }
+
+        if ($this->namespaceResolver === null) {
+            $this->namespaceResolver = new DefaultCacheNamespaceResolver($this->config);
+        }
+
+        if ($this->store === null) {
+            $serializer = new CacheValueSerializer();
+            $this->store = $this->createStore($serializer);
+        }
+
+        if ($this->tagIndex === null) {
+            $this->tagIndex = $this->createTagIndex();
+        }
+    }
+
+    private function buildConfig(): CacheConfig
+    {
+        if (!isset(
+            $this->driver,
+            $this->prefix,
+            $this->app,
+            $this->env,
+            $this->defaultTtl,
+            $this->allowForever,
+            $this->tagsEnabled,
+            $this->redisHost,
+            $this->redisPort,
+            $this->redisScheme,
+            $this->redisPassword,
+        )) {
+            return CacheConfig::fromEnvironment();
+        }
+
+        return new CacheConfig(
+            driver: $this->driver,
+            prefix: $this->prefix,
+            app: $this->app,
+            env: $this->env,
+            defaultTtl: $this->defaultTtl,
+            allowForever: $this->allowForever,
+            tagsEnabled: $this->tagsEnabled,
+            redisHost: $this->redisHost,
+            redisPort: $this->redisPort,
+            redisScheme: $this->redisScheme,
+            redisPassword: $this->redisPassword !== '' ? $this->redisPassword : null,
+        );
     }
 
     private function resolveKey(string $key, string $namespace, CacheScope $scope = CacheScope::Tenant): ResolvedCacheKey
