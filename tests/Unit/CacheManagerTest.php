@@ -37,7 +37,7 @@ final class CacheManagerTest extends TestCase
         );
         $resolver = new DefaultCacheNamespaceResolver($config);
 
-        return new CacheManager(
+        return CacheManager::withDependencies(
             config: $config,
             store: $store,
             tagIndex: $tagIndex,
