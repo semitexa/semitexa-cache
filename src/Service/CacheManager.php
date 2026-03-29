@@ -21,6 +21,7 @@ use Semitexa\Cache\Tag\NullTagIndex;
 use Semitexa\Cache\Tag\RedisTagIndex;
 use Semitexa\Core\Attributes\Config;
 use Semitexa\Core\Attributes\SatisfiesServiceContract;
+use Semitexa\Core\Environment;
 
 #[SatisfiesServiceContract(of: CacheManagerInterface::class)]
 final class CacheManager implements CacheManagerInterface
@@ -279,11 +280,14 @@ final class CacheManager implements CacheManagerInterface
             return CacheConfig::fromEnvironment();
         }
 
-        return new CacheConfig(
+        $resolvedApp = Environment::getEnvValue('CACHE_APP', Environment::getEnvValue('APP_NAME', $this->app));
+        $resolvedEnv = Environment::getEnvValue('CACHE_ENV', Environment::getEnvValue('APP_ENV', $this->env));
+
+        return CacheConfig::validate(new CacheConfig(
             driver: $this->driver,
             prefix: $this->prefix,
-            app: $this->app,
-            env: $this->env,
+            app: $resolvedApp,
+            env: $resolvedEnv,
             defaultTtl: $this->defaultTtl,
             allowForever: $this->allowForever,
             tagsEnabled: $this->tagsEnabled,
@@ -291,7 +295,7 @@ final class CacheManager implements CacheManagerInterface
             redisPort: $this->redisPort,
             redisScheme: $this->redisScheme,
             redisPassword: $this->redisPassword !== '' ? $this->redisPassword : null,
-        );
+        ));
     }
 
     private function resolveKey(string $key, string $namespace, CacheScope $scope = CacheScope::Tenant): ResolvedCacheKey

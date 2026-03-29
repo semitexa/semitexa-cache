@@ -23,18 +23,10 @@ final readonly class CacheConfig
     public static function fromEnvironment(): self
     {
         $driver = Environment::getEnvValue('CACHE_DRIVER', 'array');
-        if (!in_array($driver, ['array', 'redis'], true)) {
-            throw new \InvalidArgumentException("Invalid CACHE_DRIVER value '{$driver}'. Supported: array, redis.");
-        }
-
         $ttl = (int) Environment::getEnvValue('CACHE_DEFAULT_TTL', '300');
-        if ($ttl < 0) {
-            throw new \InvalidArgumentException('CACHE_DEFAULT_TTL must be >= 0.');
-        }
-
         $password = Environment::getEnvValue('REDIS_PASSWORD');
 
-        return new self(
+        return self::validate(new self(
             driver: $driver,
             prefix: Environment::getEnvValue('CACHE_PREFIX', 'semitexa'),
             app: Environment::getEnvValue('CACHE_APP', Environment::getEnvValue('APP_NAME', 'app')),
@@ -46,6 +38,19 @@ final readonly class CacheConfig
             redisPort: (int) Environment::getEnvValue('REDIS_PORT', '6379'),
             redisScheme: Environment::getEnvValue('REDIS_SCHEME', 'tcp'),
             redisPassword: ($password !== null && $password !== '') ? $password : null,
-        );
+        ));
+    }
+
+    public static function validate(self $config): self
+    {
+        if (!in_array($config->driver, ['array', 'redis'], true)) {
+            throw new \InvalidArgumentException("Invalid CACHE_DRIVER value '{$config->driver}'. Supported: array, redis.");
+        }
+
+        if ($config->defaultTtl < 0) {
+            throw new \InvalidArgumentException('CACHE_DEFAULT_TTL must be >= 0.');
+        }
+
+        return $config;
     }
 }
