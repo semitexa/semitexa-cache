@@ -1,7 +1,7 @@
 {
     "name": "semitexa/cache",
     "description": "Semitexa Cache - tenant-aware cache store with Redis backing, namespaces, and tag invalidation",
-    "version": "1.0.0",
+    "version": "v1.0.2",
     "type": "semitexa-module",
     "license": "MIT",
     "authors": [
