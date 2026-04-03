@@ -1,4 +1,4 @@
-# semitexa/cache
+# Semitexa Cache
 
 Tenant-aware cache store with Redis backing, namespace isolation, and tag-based invalidation.
 
