@@ -19,8 +19,8 @@ use Semitexa\Cache\Store\RedisCacheStore;
 use Semitexa\Cache\Tag\ArrayTagIndex;
 use Semitexa\Cache\Tag\NullTagIndex;
 use Semitexa\Cache\Tag\RedisTagIndex;
-use Semitexa\Core\Attributes\Config;
-use Semitexa\Core\Attributes\SatisfiesServiceContract;
+use Semitexa\Core\Attribute\Config;
+use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Environment;
 
 #[SatisfiesServiceContract(of: CacheManagerInterface::class)]

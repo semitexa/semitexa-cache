@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Semitexa\Cache\Console;
 
 use Semitexa\Cache\Service\CacheManager;
-use Semitexa\Core\Attributes\AsCommand;
+use Semitexa\Core\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
