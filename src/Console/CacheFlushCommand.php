@@ -4,7 +4,7 @@ namespace Semitexa\Cache\Console;
 
 use Semitexa\Cache\Enum\CacheScope;
 use Semitexa\Cache\Service\CacheManager;
-use Semitexa\Core\Attributes\AsCommand;
+use Semitexa\Core\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
