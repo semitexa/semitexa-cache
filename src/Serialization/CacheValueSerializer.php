@@ -23,8 +23,15 @@ final class CacheValueSerializer
 
     public function __construct(?string $signingKey = null)
     {
-        $envKey = $_ENV['CACHE_SIGNING_KEY'] ?? null;
-        $this->signingKey = $signingKey ?? (is_string($envKey) ? $envKey : null);
+        if ($signingKey !== null) {
+            $envKey = $signingKey;
+        } else {
+            $envKey = $_ENV['CACHE_SIGNING_KEY'] ?? null;
+            if ($envKey === null) {
+                $envKey = getenv('CACHE_SIGNING_KEY') ?: null;
+            }
+        }
+        $this->signingKey = is_string($envKey) && $envKey !== '' ? $envKey : null;
     }
 
     public function encode(CacheEntry $entry): string
@@ -37,7 +44,7 @@ final class CacheValueSerializer
             }
         } else {
             // Non-scalar values: use signed PHP serialization if key is available
-            if ($this->signingKey !== null) {
+            if ($this->signingKey !== null && $this->signingKey !== '') {
                 $format = 'php';
                 $raw = base64_encode(serialize($entry->value));
                 $signature = hash_hmac('sha256', $raw, $this->signingKey);
@@ -86,6 +93,10 @@ final class CacheValueSerializer
         /** @var string $value */
         $value = $data['value'];
 
+        if (!is_string($format) || !is_string($value)) {
+            throw new CacheSerializationException('Cache envelope has invalid field types.');
+        }
+
         $decoded = match ($format) {
             'json' => json_decode($value, associative: true, flags: JSON_THROW_ON_ERROR),
             'php' => $this->decodeSignedPhp($value),
@@ -98,10 +109,18 @@ final class CacheValueSerializer
         $createdAt = $data['created_at'];
         $ttlRaw = $data['ttl'] ?? null;
 
+        if (!is_numeric($createdAt)) {
+            throw new CacheSerializationException('Cache envelope has invalid created_at value.');
+        }
+
+        if ($ttlRaw !== null && !is_numeric($ttlRaw)) {
+            throw new CacheSerializationException('Cache envelope has invalid ttl value.');
+        }
+
         return new CacheEntry(
             value: $decoded,
-            createdAtEpoch: is_numeric($createdAt) ? (int) $createdAt : 0,
-            ttlSeconds: is_numeric($ttlRaw) ? (int) $ttlRaw : null,
+            createdAtEpoch: (int) $createdAt,
+            ttlSeconds: $ttlRaw !== null ? (int) $ttlRaw : null,
             format: $format,
             tags: new TagSet($tags),
         );
@@ -122,16 +141,18 @@ final class CacheValueSerializer
             );
         }
 
-        if ($this->signingKey === null) {
+        $sig = $wrapper['sig'];
+        $data = $wrapper['data'];
+
+        if (!is_string($sig) || !is_string($data)) {
+            throw new CacheSerializationException('Signed cache envelope has invalid field types.');
+        }
+
+        if ($this->signingKey === null || $this->signingKey === '') {
             throw new CacheSerializationException(
                 'Cannot decode signed PHP-serialized cache value: CACHE_SIGNING_KEY is not configured.'
             );
         }
-
-        /** @var string $sig */
-        $sig = $wrapper['sig'];
-        /** @var string $data */
-        $data = $wrapper['data'];
 
         $expectedSig = hash_hmac('sha256', $data, $this->signingKey);
         if (!hash_equals($expectedSig, $sig)) {
