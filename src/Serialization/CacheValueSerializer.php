@@ -11,7 +11,7 @@ use Semitexa\Cache\Internal\TagSet;
  *
  * Security: PHP serialization (unserialize) is disabled by default
  * to prevent object injection attacks (VULN-002). Non-scalar values
- * are converted to JSON on encode and rejected on decode.
+ * require signed PHP serialization and are rejected otherwise.
  *
  * To enable signed PHP serialization, configure a CACHE_SIGNING_KEY
  * environment variable. When set, values are HMAC-signed before
@@ -46,15 +46,10 @@ final class CacheValueSerializer
                     throw new CacheSerializationException('Failed to encode signed cache value.');
                 }
             } else {
-                // Fallback: convert to JSON (may lose type fidelity for objects)
-                $format = 'json';
-                $encoded = json_encode($entry->value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-                if ($encoded === false) {
-                    throw new CacheSerializationException(
-                        'Cannot cache non-scalar value without CACHE_SIGNING_KEY. '
-                        . 'Objects require a signing key for secure serialization.'
-                    );
-                }
+                throw new CacheSerializationException(
+                    'Cannot cache non-scalar value without CACHE_SIGNING_KEY. '
+                    . 'Objects require a signing key for secure serialization.'
+                );
             }
         }
 
