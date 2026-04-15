@@ -63,6 +63,8 @@ final class CacheValueSerializerTest extends TestCase
 
     public function testEncodeDecodeObjectUsingPhpFormat(): void
     {
+        $this->serializer = new CacheValueSerializer('signed-test-key');
+
         $obj = new \stdClass();
         $obj->name = 'test';
         $obj->value = 42;
@@ -75,6 +77,17 @@ final class CacheValueSerializerTest extends TestCase
         self::assertSame('test', $decoded->value->name);
         self::assertSame(42, $decoded->value->value);
         self::assertSame('php', $decoded->format);
+    }
+
+    public function testEncodeObjectWithoutSigningKeyThrows(): void
+    {
+        $obj = new \stdClass();
+        $obj->name = 'unsafe';
+
+        $this->expectException(CacheSerializationException::class);
+        $this->expectExceptionMessage('Objects require a signing key');
+
+        $this->serializer->encode($this->makeEntry($obj));
     }
 
     public function testEncodeDecodeTags(): void
