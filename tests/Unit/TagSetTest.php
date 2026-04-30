@@ -3,7 +3,7 @@ declare(strict_types=1);
 namespace Semitexa\Cache\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Semitexa\Cache\Internal\TagSet;
+use Semitexa\Cache\Domain\Model\TagSet;
 
 final class TagSetTest extends TestCase
 {

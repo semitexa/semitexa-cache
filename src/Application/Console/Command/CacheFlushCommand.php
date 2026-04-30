@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Console;
+namespace Semitexa\Cache\Application\Console\Command;
 
-use Semitexa\Cache\Enum\CacheScope;
-use Semitexa\Cache\Service\CacheManager;
+use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Application\Service\CacheManager;
 use Semitexa\Core\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;

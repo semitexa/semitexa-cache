@@ -3,8 +3,8 @@ declare(strict_types=1);
 namespace Semitexa\Cache\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Semitexa\Cache\Enum\CacheScope;
-use Semitexa\Cache\Internal\CacheNamespace;
+use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
 
 final class CacheNamespaceTest extends TestCase
 {

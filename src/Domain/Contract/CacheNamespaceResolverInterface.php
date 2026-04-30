@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Contract;
+namespace Semitexa\Cache\Domain\Contract;
 
-use Semitexa\Cache\Enum\CacheScope;
-use Semitexa\Cache\Internal\CacheNamespace;
+use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
 
 interface CacheNamespaceResolverInterface
 {

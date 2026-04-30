@@ -1,10 +1,10 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Serialization;
+namespace Semitexa\Cache\Application\Service;
 
 use Semitexa\Cache\Exception\CacheSerializationException;
-use Semitexa\Cache\Internal\CacheEntry;
-use Semitexa\Cache\Internal\TagSet;
+use Semitexa\Cache\Domain\Model\CacheEntry;
+use Semitexa\Cache\Domain\Model\TagSet;
 
 /**
  * Serializes and deserializes cache entries.

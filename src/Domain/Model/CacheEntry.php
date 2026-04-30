@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Internal;
+namespace Semitexa\Cache\Domain\Model;
 
 final readonly class CacheEntry
 {

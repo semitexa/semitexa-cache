@@ -1,11 +1,11 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Tag;
+namespace Semitexa\Cache\Application\Service;
 
-use Semitexa\Cache\Contract\TagIndexInterface;
-use Semitexa\Cache\Internal\CacheNamespace;
-use Semitexa\Cache\Internal\ResolvedCacheKey;
-use Semitexa\Cache\Internal\TagSet;
+use Semitexa\Cache\Domain\Contract\TagIndexInterface;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
+use Semitexa\Cache\Domain\Model\TagSet;
 
 /**
  * In-memory tag index for array driver. Development and test use only.
