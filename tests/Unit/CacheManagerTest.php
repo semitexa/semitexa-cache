@@ -4,14 +4,14 @@ namespace Semitexa\Cache\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Cache\Configuration\CacheConfig;
-use Semitexa\Cache\Enum\CacheScope;
-use Semitexa\Cache\Internal\CacheNamespace;
-use Semitexa\Cache\Namespace\DefaultCacheNamespaceResolver;
-use Semitexa\Cache\Serialization\CacheValueSerializer;
-use Semitexa\Cache\Service\CacheManager;
-use Semitexa\Cache\Service\ScopedCacheManager;
-use Semitexa\Cache\Store\ArrayCacheStore;
-use Semitexa\Cache\Tag\ArrayTagIndex;
+use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Cache\Application\Service\DefaultCacheNamespaceResolver;
+use Semitexa\Cache\Application\Service\CacheValueSerializer;
+use Semitexa\Cache\Application\Service\CacheManager;
+use Semitexa\Cache\Application\Service\ScopedCacheManager;
+use Semitexa\Cache\Application\Service\ArrayCacheStore;
+use Semitexa\Cache\Application\Service\ArrayTagIndex;
 
 final class CacheManagerTest extends TestCase
 {

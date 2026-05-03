@@ -1,11 +1,11 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Namespace;
+namespace Semitexa\Cache\Application\Service;
 
 use Semitexa\Cache\Configuration\CacheConfig;
-use Semitexa\Cache\Contract\CacheNamespaceResolverInterface;
-use Semitexa\Cache\Enum\CacheScope;
-use Semitexa\Cache\Internal\CacheNamespace;
+use Semitexa\Cache\Domain\Contract\CacheNamespaceResolverInterface;
+use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
 
 final class DefaultCacheNamespaceResolver implements CacheNamespaceResolverInterface
 {

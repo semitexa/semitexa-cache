@@ -3,13 +3,13 @@ declare(strict_types=1);
 namespace Semitexa\Cache\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
-use Semitexa\Cache\Enum\CacheScope;
-use Semitexa\Cache\Internal\CacheEntry;
-use Semitexa\Cache\Internal\CacheNamespace;
-use Semitexa\Cache\Internal\ResolvedCacheKey;
-use Semitexa\Cache\Internal\TagSet;
-use Semitexa\Cache\Serialization\CacheValueSerializer;
-use Semitexa\Cache\Store\ArrayCacheStore;
+use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Domain\Model\CacheEntry;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
+use Semitexa\Cache\Domain\Model\TagSet;
+use Semitexa\Cache\Application\Service\CacheValueSerializer;
+use Semitexa\Cache\Application\Service\ArrayCacheStore;
 
 final class ArrayStoreContractTest extends TestCase
 {

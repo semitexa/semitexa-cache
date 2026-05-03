@@ -1,14 +1,14 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Store;
+namespace Semitexa\Cache\Application\Service;
 
 use Predis\ClientInterface;
 use Semitexa\Cache\Configuration\CacheConfig;
-use Semitexa\Cache\Contract\CacheStoreInterface;
-use Semitexa\Cache\Internal\CacheEntry;
-use Semitexa\Cache\Internal\CacheNamespace;
-use Semitexa\Cache\Internal\ResolvedCacheKey;
-use Semitexa\Cache\Serialization\CacheValueSerializer;
+use Semitexa\Cache\Domain\Contract\CacheStoreInterface;
+use Semitexa\Cache\Domain\Model\CacheEntry;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
+use Semitexa\Cache\Application\Service\CacheValueSerializer;
 
 final class RedisCacheStore implements CacheStoreInterface
 {

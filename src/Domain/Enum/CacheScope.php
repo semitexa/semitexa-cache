@@ -1,6 +1,6 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Enum;
+namespace Semitexa\Cache\Domain\Enum;
 
 enum CacheScope: string
 {

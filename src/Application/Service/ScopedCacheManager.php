@@ -1,9 +1,9 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Service;
+namespace Semitexa\Cache\Application\Service;
 
-use Semitexa\Cache\Contract\CacheManagerInterface;
-use Semitexa\Cache\Enum\CacheScope;
+use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
+use Semitexa\Cache\Domain\Enum\CacheScope;
 
 /**
  * Immutable scoped view over a root CacheManager.

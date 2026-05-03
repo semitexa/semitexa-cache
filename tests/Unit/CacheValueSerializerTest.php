@@ -4,9 +4,9 @@ namespace Semitexa\Cache\Tests\Unit;
 
 use PHPUnit\Framework\TestCase;
 use Semitexa\Cache\Exception\CacheSerializationException;
-use Semitexa\Cache\Internal\CacheEntry;
-use Semitexa\Cache\Internal\TagSet;
-use Semitexa\Cache\Serialization\CacheValueSerializer;
+use Semitexa\Cache\Domain\Model\CacheEntry;
+use Semitexa\Cache\Domain\Model\TagSet;
+use Semitexa\Cache\Application\Service\CacheValueSerializer;
 
 final class CacheValueSerializerTest extends TestCase
 {

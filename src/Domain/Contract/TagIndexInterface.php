@@ -1,10 +1,10 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Contract;
+namespace Semitexa\Cache\Domain\Contract;
 
-use Semitexa\Cache\Internal\CacheNamespace;
-use Semitexa\Cache\Internal\ResolvedCacheKey;
-use Semitexa\Cache\Internal\TagSet;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
+use Semitexa\Cache\Domain\Model\TagSet;
 
 interface TagIndexInterface
 {

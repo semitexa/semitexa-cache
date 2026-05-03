@@ -1,8 +1,8 @@
 <?php
 declare(strict_types=1);
-namespace Semitexa\Cache\Internal;
+namespace Semitexa\Cache\Domain\Model;
 
-use Semitexa\Cache\Enum\CacheScope;
+use Semitexa\Cache\Domain\Enum\CacheScope;
 
 final readonly class CacheNamespace
 {
