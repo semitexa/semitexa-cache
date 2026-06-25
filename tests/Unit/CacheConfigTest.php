@@ -75,4 +75,43 @@ final class CacheConfigTest extends TestCase
         self::assertTrue($config->allowForever);
         self::assertFalse($config->tagsEnabled);
     }
+
+    public function testRedisPoolSizeDefaultsToEight(): void
+    {
+        $config = new CacheConfig(
+            driver: 'redis',
+            prefix: 'semitexa',
+            app: 'app',
+            env: 'test',
+            defaultTtl: 300,
+            allowForever: false,
+            tagsEnabled: true,
+            redisHost: '127.0.0.1',
+            redisPort: 6379,
+            redisScheme: 'tcp',
+            redisPassword: null,
+        );
+
+        self::assertSame(8, $config->redisPoolSize);
+    }
+
+    public function testValidateRejectsRedisPoolSizeBelowOne(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        CacheConfig::validate(new CacheConfig(
+            driver: 'redis',
+            prefix: 'semitexa',
+            app: 'app',
+            env: 'test',
+            defaultTtl: 300,
+            allowForever: false,
+            tagsEnabled: true,
+            redisHost: '127.0.0.1',
+            redisPort: 6379,
+            redisScheme: 'tcp',
+            redisPassword: null,
+            redisPoolSize: 0,
+        ));
+    }
 }
