@@ -18,6 +18,7 @@ final readonly class CacheConfig
         public int $redisPort,
         public string $redisScheme,
         public ?string $redisPassword,
+        public int $redisPoolSize = 8,
     ) {}
 
     public static function fromEnvironment(): self
@@ -38,6 +39,7 @@ final readonly class CacheConfig
             redisPort: (int) Environment::getEnvValue('REDIS_PORT', '6379'),
             redisScheme: Environment::getEnvValue('REDIS_SCHEME', 'tcp'),
             redisPassword: ($password !== null && $password !== '') ? $password : null,
+            redisPoolSize: (int) Environment::getEnvValue('CACHE_REDIS_POOL_SIZE', '8'),
         ));
     }
 
@@ -49,6 +51,10 @@ final readonly class CacheConfig
 
         if ($config->defaultTtl < 0) {
             throw new \InvalidArgumentException('CACHE_DEFAULT_TTL must be >= 0.');
+        }
+
+        if ($config->redisPoolSize < 1) {
+            throw new \InvalidArgumentException('CACHE_REDIS_POOL_SIZE must be >= 1.');
         }
 
         return $config;
