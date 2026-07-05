@@ -26,6 +26,8 @@ use Semitexa\Core\Environment;
 #[SatisfiesServiceContract(of: CacheManagerInterface::class)]
 final class CacheManager implements CacheManagerInterface
 {
+    use SingleFlightRemember;
+
     #[Config(env: 'CACHE_DRIVER', default: 'array')]
     protected string $driver;
 
@@ -92,16 +94,6 @@ final class CacheManager implements CacheManagerInterface
         $this->doPut(namespace: '', scope: CacheScope::Tenant, extraTags: [], key: $key, value: $value, ttlSeconds: $ttlSeconds, tags: $tags);
     }
 
-    public function remember(string $key, callable $resolver, ?int $ttlSeconds = null, array $tags = []): mixed
-    {
-        $existing = $this->get($key);
-        if ($existing !== null) {
-            return $existing;
-        }
-        $value = $resolver();
-        $this->put($key, $value, $ttlSeconds, $tags);
-        return $value;
-    }
 
     public function forget(string $key): void
     {

@@ -12,6 +12,8 @@ use Semitexa\Cache\Domain\Enum\CacheScope;
  */
 final class ScopedCacheManager implements CacheManagerInterface
 {
+    use SingleFlightRemember;
+
     /** @param list<string> $tags */
     public function __construct(
         private readonly CacheManager $root,
@@ -38,16 +40,6 @@ final class ScopedCacheManager implements CacheManagerInterface
         );
     }
 
-    public function remember(string $key, callable $resolver, ?int $ttlSeconds = null, array $tags = []): mixed
-    {
-        $existing = $this->get($key);
-        if ($existing !== null) {
-            return $existing;
-        }
-        $value = $resolver();
-        $this->put($key, $value, $ttlSeconds, $tags);
-        return $value;
-    }
 
     public function forget(string $key): void
     {
