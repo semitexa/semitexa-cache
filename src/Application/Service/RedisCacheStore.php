@@ -36,10 +36,19 @@ final class RedisCacheStore implements CacheStoreInterface
         private readonly CacheValueSerializer $serializer,
         ?ClientInterface $redis = null,
         ?CacheConfig $config = null,
+        ?RedisConnectionPool $pool = null,
     ) {
         if ($redis !== null) {
             $this->client = $redis;
             $this->pool = null;
+            return;
+        }
+
+        if ($pool !== null) {
+            // Shared with the tag index: one pool of connections per manager,
+            // not one per collaborator.
+            $this->client = null;
+            $this->pool = $pool;
             return;
         }
 

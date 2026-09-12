@@ -103,6 +103,7 @@ final class CacheRememberSingleFlightTest extends TestCase
         $store = new ArrayCacheStore($serializer);
         $tagIndex = new ArrayTagIndex(
             deleteByString: static fn (string $k) => $store->deleteByString($k),
+            tagsOfKey: static fn (string $k) => $store->getByString($k)?->tags,
         );
 
         return CacheManager::withDependencies(

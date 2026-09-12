@@ -9,7 +9,7 @@ use Semitexa\Cache\Domain\Model\TagSet;
 
 final class NullTagIndex implements TagIndexInterface
 {
-    public function attach(ResolvedCacheKey $key, TagSet $tags): void {}
+    public function attach(ResolvedCacheKey $key, TagSet $tags, ?int $ttlSeconds = null): void {}
 
     public function detach(ResolvedCacheKey $key, TagSet $tags): void {}
 
