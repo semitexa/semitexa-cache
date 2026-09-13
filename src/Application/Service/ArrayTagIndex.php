@@ -2,7 +2,7 @@
 declare(strict_types=1);
 namespace Semitexa\Cache\Application\Service;
 
-use Semitexa\Cache\Domain\Contract\TagIndexInterface;
+use Semitexa\Cache\Domain\Contract\ExternalTagIndexInterface;
 use Semitexa\Cache\Domain\Model\CacheNamespace;
 use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
 use Semitexa\Cache\Domain\Model\TagSet;
@@ -23,7 +23,7 @@ use Semitexa\Cache\Domain\Model\TagSet;
  * being flushed; a member that no longer qualifies is pruned from the index
  * instead of being obeyed.
  */
-final class ArrayTagIndex implements TagIndexInterface
+final class ArrayTagIndex implements ExternalTagIndexInterface
 {
     /** @var array<string, list<string>> namespaced tag key => list of resolved key strings */
     private array $index = [];
@@ -37,12 +37,17 @@ final class ArrayTagIndex implements TagIndexInterface
         private readonly \Closure $tagsOfKey,
     ) {}
 
+    public function attach(ResolvedCacheKey $key, TagSet $tags): void
+    {
+        $this->attachWithLifetime($key, $tags, null);
+    }
+
     /**
      * $ttlSeconds is ignored: this index lives in the process, not in a store
      * that outlives it, so it cannot leak past the worker. Its members are
      * pruned when a tag is flushed, which is the only growth bound it needs.
      */
-    public function attach(ResolvedCacheKey $key, TagSet $tags, ?int $ttlSeconds = null): void
+    public function attachWithLifetime(ResolvedCacheKey $key, TagSet $tags, ?int $ttlSeconds): void
     {
         $keyStr = $key->asString();
         foreach ($tags->values() as $tag) {
@@ -83,7 +88,9 @@ final class ArrayTagIndex implements TagIndexInterface
 
             // Every member of this set belongs to this namespace by
             // construction, so there is nothing to filter — only to verify.
-            $kept = [];
+            // Nothing is ever kept: a member either still carries the tag and
+            // is deleted, or it does not and is stale. So the list goes either
+            // way, and there is no branch here that keeps part of it.
             foreach ($members as $keyStr) {
                 $current = ($this->tagsOfKey)($keyStr);
                 if ($current === null) {
@@ -100,11 +107,7 @@ final class ArrayTagIndex implements TagIndexInterface
                 $count++;
             }
 
-            if ($kept === []) {
-                unset($this->index[$tagKey]);
-            } else {
-                $this->index[$tagKey] = $kept;
-            }
+            unset($this->index[$tagKey]);
         }
 
         return $count;
@@ -113,5 +116,30 @@ final class ArrayTagIndex implements TagIndexInterface
     public function supportsNamespaceFlush(): bool
     {
         return true;
+    }
+
+    /**
+     * Forget this namespace's candidate lists.
+     *
+     * The same reach as the store's sweep and as the Redis index: the root
+     * namespace's tag prefix is a prefix of every named one, so clearing the
+     * root clears them all. Nothing here would break without it — a stale
+     * candidate is verified against the store before it is obeyed, and pruned
+     * when it fails — but leaving lists behind for entries that provably no
+     * longer exist makes flush() walk them once for nothing.
+     */
+    public function clearNamespace(CacheNamespace $namespace): int
+    {
+        $prefix = $namespace->tagKeyPrefix();
+        $removed = 0;
+
+        foreach (array_keys($this->index) as $tagKey) {
+            if (str_starts_with($tagKey, $prefix)) {
+                unset($this->index[$tagKey]);
+                $removed++;
+            }
+        }
+
+        return $removed;
     }
 }

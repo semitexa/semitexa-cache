@@ -11,12 +11,13 @@ interface TagIndexInterface
     /**
      * Record that $key carries $tags.
      *
-     * $ttlSeconds is the entry's own lifetime — null or 0 meaning it never
-     * expires. An index that persists outside the entry needs it: a tag set
-     * that dies before its members leaves them unflushable, and one that never
-     * dies grows forever.
+     * An index that keeps its own keys also needs the entry's lifetime, and
+     * needs to hear about namespace flushes. Both are asked for through
+     * {@see ExternalTagIndexInterface} rather than through this method, whose
+     * signature is published and cannot widen without breaking every
+     * implementation of it on upgrade.
      */
-    public function attach(ResolvedCacheKey $key, TagSet $tags, ?int $ttlSeconds = null): void;
+    public function attach(ResolvedCacheKey $key, TagSet $tags): void;
     public function detach(ResolvedCacheKey $key, TagSet $tags): void;
     public function flush(CacheNamespace $namespace, TagSet $tags): int;
     public function supportsNamespaceFlush(): bool;

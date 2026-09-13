@@ -4,7 +4,7 @@ namespace Semitexa\Cache\Application\Service;
 
 use Predis\ClientInterface;
 use Semitexa\Cache\Configuration\CacheConfig;
-use Semitexa\Cache\Domain\Contract\TagIndexInterface;
+use Semitexa\Cache\Domain\Contract\ExternalTagIndexInterface;
 use Semitexa\Cache\Domain\Model\CacheNamespace;
 use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
 use Semitexa\Cache\Domain\Model\TagSet;
@@ -41,7 +41,7 @@ use Semitexa\Core\Redis\RedisConnectionPool;
  * member of a set now belongs to that namespace by construction, so there is
  * nothing left to filter.
  */
-final class RedisTagIndex implements TagIndexInterface
+final class RedisTagIndex implements ExternalTagIndexInterface
 {
     /**
      * Add a member and give the set a lifetime that covers it — atomically.
@@ -105,7 +105,13 @@ final class RedisTagIndex implements TagIndexInterface
         ]);
     }
 
-    public function attach(ResolvedCacheKey $key, TagSet $tags, ?int $ttlSeconds = null): void
+    /** The published contract, which carries no lifetime: the set outlives nothing it can measure. */
+    public function attach(ResolvedCacheKey $key, TagSet $tags): void
+    {
+        $this->attachWithLifetime($key, $tags, null);
+    }
+
+    public function attachWithLifetime(ResolvedCacheKey $key, TagSet $tags, ?int $ttlSeconds): void
     {
         $this->withConnection(function (ClientInterface $redis) use ($key, $tags, $ttlSeconds): void {
             $forever = $ttlSeconds === null || $ttlSeconds <= 0 ? 1 : 0;
@@ -229,6 +235,54 @@ final class RedisTagIndex implements TagIndexInterface
     public function supportsNamespaceFlush(): bool
     {
         return true;
+    }
+
+    /**
+     * Drop this namespace's tag sets.
+     *
+     * Clearing a namespace scans the ENTRY keyspace, and the sets no longer
+     * live there — they were moved out so that the root namespace's prefix
+     * could stop matching every named one. So nothing removed them, and a set
+     * holding a member that never expires has no expiry of its own either: it
+     * survived the flush that deleted everything it named, and grew again from
+     * there on the next write. Raised in review of cache#19.
+     *
+     * The prefix match carries the same reach the store's own sweep has: the
+     * root namespace's prefix is a prefix of every named one, so clearing the
+     * root clears the tenant, entries and sets alike. That is what clearing
+     * the root already did to the entries.
+     *
+     * The legacy tenant-wide sets are deliberately not swept here. They live
+     * INSIDE the entry keyspace, so the store's scan already removes them when
+     * the root is cleared — and they name members from every namespace, so
+     * clearing one named namespace must not take them with it.
+     */
+    public function clearNamespace(CacheNamespace $namespace): int
+    {
+        return $this->withConnection(static function (ClientInterface $redis) use ($namespace): int {
+            $removed = 0;
+            $pattern = $namespace->tagKeyPrefix() . '*';
+            $cursor = '0';
+
+            do {
+                $page = $redis->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
+                $cursor = is_scalar($page[0] ?? null) ? (string) $page[0] : '0';
+
+                $keys = [];
+                foreach (is_array($page[1] ?? null) ? $page[1] : [] as $key) {
+                    if (is_string($key)) {
+                        $keys[] = $key;
+                    }
+                }
+
+                if ($keys !== []) {
+                    $redis->del($keys);
+                    $removed += count($keys);
+                }
+            } while ($cursor !== '0');
+
+            return $removed;
+        });
     }
 
     /**

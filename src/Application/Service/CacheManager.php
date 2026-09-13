@@ -6,6 +6,7 @@ use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
 use Semitexa\Cache\Domain\Contract\CacheNamespaceResolverInterface;
 use Semitexa\Cache\Domain\Contract\CacheStoreInterface;
+use Semitexa\Cache\Domain\Contract\ExternalTagIndexInterface;
 use Semitexa\Cache\Domain\Contract\TagIndexInterface;
 use Semitexa\Cache\Domain\Enum\CacheScope;
 use Semitexa\Cache\Domain\Model\CacheEntry;
@@ -127,7 +128,20 @@ final class CacheManager implements CacheManagerInterface
     {
         $this->boot();
         $ns = $this->namespaceResolver->resolve($namespace ?? '', CacheScope::Tenant);
-        return $this->store->clearNamespace($ns);
+        $cleared = $this->store->clearNamespace($ns);
+
+        // The entries are gone; the sets that named them are not, because they
+        // live outside the keyspace the store just swept. A set whose longest
+        // member never expires has no expiry of its own either, so without
+        // this it outlives everything it names and grows again from there.
+        // The return value stays a count of ENTRIES — index keys are
+        // bookkeeping, and counting them would inflate what the caller reads
+        // as "how much cache did I just drop".
+        if ($this->tagIndex instanceof ExternalTagIndexInterface) {
+            $this->tagIndex->clearNamespace($ns);
+        }
+
+        return $cleared;
     }
 
     public function withNamespace(string $namespace): ScopedCacheManager
@@ -197,7 +211,14 @@ final class CacheManager implements CacheManagerInterface
         $this->store->put($resolved, $entry);
 
         if (!$tagSet->isEmpty() && $this->config->tagsEnabled) {
-            $this->tagIndex->attach($resolved, $tagSet, $entry->ttlSeconds);
+            // An index that keeps its own keys is told how long the entry
+            // lives; one that only implements the published contract is called
+            // the way it always was. See ExternalTagIndexInterface.
+            if ($this->tagIndex instanceof ExternalTagIndexInterface) {
+                $this->tagIndex->attachWithLifetime($resolved, $tagSet, $entry->ttlSeconds);
+            } else {
+                $this->tagIndex->attach($resolved, $tagSet);
+            }
         }
     }
 
