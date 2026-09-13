@@ -84,7 +84,7 @@ final class RedisNamespaceFlushClearsTagsTest extends TestCase
         return CacheManager::withDependencies(
             config: $config,
             store: new RedisCacheStore($serializer, $this->redis),
-            tagIndex: new RedisTagIndex($serializer, $this->redis),
+            tagIndex: new RedisTagIndex($this->redis, $serializer),
             namespaceResolver: new DefaultCacheNamespaceResolver($config),
         );
     }
@@ -138,6 +138,26 @@ final class RedisNamespaceFlushClearsTagsTest extends TestCase
         $left = $this->tagKeys();
         self::assertCount(1, $left);
         self::assertStringContainsString(':pages:', $left[0]);
+    }
+
+    /**
+     * The scoped manager goes to doFlushNamespace() directly, so anything
+     * flushNamespace() did on its own it did not do — which is how the cleanup
+     * covered one of the two ways to ask for the same thing. Raised in review
+     * of cache#19.
+     */
+    #[Test]
+    public function a_scoped_flush_clears_the_sets_too(): void
+    {
+        $manager = $this->makeManager();
+        $scoped = $manager->withNamespace('views');
+        $scoped->put('forever', 'v', ttlSeconds: 0, tags: ['tag']);
+
+        self::assertNotSame([], $this->tagKeys());
+
+        $scoped->flushNamespace();
+
+        self::assertSame([], $this->tagKeys());
     }
 
     /**

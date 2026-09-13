@@ -89,7 +89,7 @@ final class RedisTagFlushTest extends TestCase
 
     private function index(): RedisTagIndex
     {
-        return new RedisTagIndex($this->serializer, $this->redis);
+        return new RedisTagIndex($this->redis, $this->serializer);
     }
 
     /**
@@ -229,7 +229,7 @@ final class RedisTagFlushTest extends TestCase
             }
         };
 
-        $index = new RedisTagIndex($this->serializer, $client);
+        $index = new RedisTagIndex($client, $this->serializer);
 
         self::assertSame(0, $index->flush($ns, new TagSet(['tag'])), 'nothing matched what was classified');
         self::assertSame('REWRITTEN BY SOMEBODY ELSE', $this->redis->get($key), 'the newer value survives');

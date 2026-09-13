@@ -2,6 +2,7 @@
 declare(strict_types=1);
 namespace Semitexa\Cache\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Cache\Domain\Enum\CacheScope;
 use Semitexa\Cache\Domain\Model\CacheNamespace;
@@ -129,5 +130,48 @@ final class CacheNamespaceTest extends TestCase
             namespace: 'my-module_v2',
         );
         self::assertStringContainsString('my-module_v2', $ns->asPrefix());
+    }
+
+    /**
+     * A namespace may only contain `[A-Za-z0-9_-]`, but a TAG is whatever the
+     * caller passed. So a root tag of `views:foo` built the same key as tag
+     * `foo` in namespace `views`: two different sets in one place. Flushing the
+     * namespaced tag pruned the root entry's membership as not carrying `foo`,
+     * and the root flush of `views:foo` could then never reach it. Raised in
+     * review of cache#19.
+     */
+    #[Test]
+    public function a_tag_cannot_pose_as_a_namespace_boundary(): void
+    {
+        $root = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 'tenant', '');
+        $views = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 'tenant', 'views');
+
+        self::assertNotSame(
+            $root->tagKey('views:foo'),
+            $views->tagKey('foo'),
+            'two different tag sets must not share one key',
+        );
+    }
+
+    #[Test]
+    public function an_ordinary_tag_is_still_readable_in_the_key(): void
+    {
+        $ns = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 'tenant', 'views');
+
+        self::assertSame($ns->tagKeyPrefix() . 'article-7', $ns->tagKey('article-7'));
+    }
+
+    #[Test]
+    public function a_tag_round_trips_through_the_encoding(): void
+    {
+        $ns = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 'tenant', '');
+
+        foreach (['views:foo', 'a b', 'a/b', 'ключ'] as $tag) {
+            self::assertSame(
+                $tag,
+                rawurldecode(substr($ns->tagKey($tag), strlen($ns->tagKeyPrefix()))),
+                'the key has to name exactly one tag, and say which',
+            );
+        }
     }
 }

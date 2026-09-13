@@ -85,7 +85,7 @@ final class RedisTagSetLifetimeTest extends TestCase
         return CacheManager::withDependencies(
             config: $config,
             store: new RedisCacheStore($serializer, $this->redis),
-            tagIndex: new RedisTagIndex($serializer, $this->redis),
+            tagIndex: new RedisTagIndex($this->redis, $serializer),
             namespaceResolver: new DefaultCacheNamespaceResolver($config),
         );
     }

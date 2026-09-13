@@ -56,6 +56,23 @@ final readonly class CacheNamespace
     }
 
     /**
+     * The key of ONE tag set in this namespace.
+     *
+     * The tag is encoded, and that is not cosmetic: a namespace may only
+     * contain `[A-Za-z0-9_-]`, but a TAG is whatever the caller passed, so a
+     * root tag of `views:foo` built the same key as tag `foo` in namespace
+     * `views`. Two different sets, one key — flushing the namespaced tag
+     * pruned the root entry's membership as not carrying `foo`, and the root
+     * flush of `views:foo` could then never reach it. Percent-encoding the tag
+     * removes the colon it needed to pose as a namespace boundary. Raised in
+     * review of cache#19.
+     */
+    public function tagKey(string $tag): string
+    {
+        return $this->tagKeyPrefix() . rawurlencode($tag);
+    }
+
+    /**
      * Where tag memberships lived before this layout: one set per TENANT, with
      * no namespace and no marker of its own.
      *

@@ -51,7 +51,7 @@ final class ArrayTagIndex implements ExternalTagIndexInterface
     {
         $keyStr = $key->asString();
         foreach ($tags->values() as $tag) {
-            $tagKey = $key->namespace->tagKeyPrefix() . $tag;
+            $tagKey = $key->namespace->tagKey($tag);
             // Re-attaching the same key under the same tag is a no-op: a set,
             // not a log. Without this a key rewritten N times is counted N
             // times by flush() and walked N times on every invalidation.
@@ -66,7 +66,7 @@ final class ArrayTagIndex implements ExternalTagIndexInterface
     {
         $keyStr = $key->asString();
         foreach ($tags->values() as $tag) {
-            $tagKey = $key->namespace->tagKeyPrefix() . $tag;
+            $tagKey = $key->namespace->tagKey($tag);
             if (isset($this->index[$tagKey])) {
                 $this->index[$tagKey] = array_values(
                     array_filter($this->index[$tagKey], static fn(string $k) => $k !== $keyStr)
@@ -80,7 +80,7 @@ final class ArrayTagIndex implements ExternalTagIndexInterface
         $count = 0;
 
         foreach ($tags->values() as $tag) {
-            $tagKey = $namespace->tagKeyPrefix() . $tag;
+            $tagKey = $namespace->tagKey($tag);
             $members = $this->index[$tagKey] ?? [];
             if ($members === []) {
                 continue;

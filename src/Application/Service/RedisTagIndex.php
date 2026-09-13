@@ -77,12 +77,26 @@ final class RedisTagIndex implements ExternalTagIndexInterface
     private readonly ?ClientInterface $client;
     private readonly ?RedisConnectionPool $pool;
 
+    private readonly CacheValueSerializer $serializer;
+
+    /**
+     * The first parameter is still the client, and still optional in effect.
+     *
+     * `new RedisTagIndex($client)` is the released signature, and a consumer
+     * wiring its own index through CacheManager::withDependencies() writes
+     * exactly that — putting the serializer first made every one of them pass a
+     * client where a serializer was expected and fail with a TypeError before
+     * anything ran. Keeping the interface compatible was not enough; this class
+     * is public too. Raised in review of cache#19.
+     */
     public function __construct(
-        private readonly CacheValueSerializer $serializer,
         ?ClientInterface $redis = null,
+        ?CacheValueSerializer $serializer = null,
         ?CacheConfig $config = null,
         ?RedisConnectionPool $pool = null,
     ) {
+        $this->serializer = $serializer ?? new CacheValueSerializer();
+
         if ($redis !== null) {
             $this->client = $redis;
             $this->pool = null;
@@ -350,7 +364,7 @@ final class RedisTagIndex implements ExternalTagIndexInterface
 
     private function tagKey(CacheNamespace $namespace, string $tag): string
     {
-        return $namespace->tagKeyPrefix() . $tag;
+        return $namespace->tagKey($tag);
     }
 
     /**

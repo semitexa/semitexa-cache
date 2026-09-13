@@ -82,7 +82,7 @@ final class RedisTagIndexCoroutineTest extends TestCase
             $manager = CacheManager::withDependencies(
                 config: $config,
                 store: new RedisCacheStore($serializer, config: $config, pool: $pool),
-                tagIndex: new RedisTagIndex($serializer, config: $config, pool: $pool),
+                tagIndex: new RedisTagIndex(serializer: $serializer, config: $config, pool: $pool),
                 namespaceResolver: new DefaultCacheNamespaceResolver($config),
             );
 

@@ -126,22 +126,7 @@ final class CacheManager implements CacheManagerInterface
 
     public function flushNamespace(?string $namespace = null): int
     {
-        $this->boot();
-        $ns = $this->namespaceResolver->resolve($namespace ?? '', CacheScope::Tenant);
-        $cleared = $this->store->clearNamespace($ns);
-
-        // The entries are gone; the sets that named them are not, because they
-        // live outside the keyspace the store just swept. A set whose longest
-        // member never expires has no expiry of its own either, so without
-        // this it outlives everything it names and grows again from there.
-        // The return value stays a count of ENTRIES — index keys are
-        // bookkeeping, and counting them would inflate what the caller reads
-        // as "how much cache did I just drop".
-        if ($this->tagIndex instanceof ExternalTagIndexInterface) {
-            $this->tagIndex->clearNamespace($ns);
-        }
-
-        return $cleared;
+        return $this->doFlushNamespace($namespace ?? '', CacheScope::Tenant);
     }
 
     public function withNamespace(string $namespace): ScopedCacheManager
@@ -264,11 +249,32 @@ final class CacheManager implements CacheManagerInterface
     /**
      * Internal: flush namespace with explicit context (used by ScopedCacheManager).
      */
+    /**
+     * Internal: the one place a namespace is cleared.
+     *
+     * ScopedCacheManager comes straight here, so anything flushNamespace()
+     * does on its own a scoped flush does not — which is how the tag-index
+     * cleanup covered `flushNamespace('views')` and not
+     * `withNamespace('views')->flushNamespace()`. Raised in review of cache#19.
+     */
     public function doFlushNamespace(string $namespace, CacheScope $scope): int
     {
         $this->boot();
         $ns = $this->namespaceResolver->resolve($namespace, $scope);
-        return $this->store->clearNamespace($ns);
+        $cleared = $this->store->clearNamespace($ns);
+
+        // The entries are gone; the sets that named them are not, because they
+        // live outside the keyspace the store just swept. A set whose longest
+        // member never expires has no expiry of its own either, so without
+        // this it outlives everything it names and grows again from there.
+        // The return value stays a count of ENTRIES — index keys are
+        // bookkeeping, and counting them would inflate what the caller reads
+        // as "how much cache did I just drop".
+        if ($this->tagIndex instanceof ExternalTagIndexInterface) {
+            $this->tagIndex->clearNamespace($ns);
+        }
+
+        return $cleared;
     }
 
     private function boot(): void
@@ -400,7 +406,7 @@ final class CacheManager implements CacheManagerInterface
         }
 
         return match ($this->config->driver) {
-            'redis' => new RedisTagIndex(new CacheValueSerializer(), config: $this->config, pool: $this->redisPool()),
+            'redis' => new RedisTagIndex(serializer: new CacheValueSerializer(), config: $this->config, pool: $this->redisPool()),
             default => $this->createArrayTagIndex(),
         };
     }
