@@ -109,17 +109,26 @@ final class RedisCacheStore implements CacheStoreInterface
     public function clearNamespace(CacheNamespace $namespace): int
     {
         return $this->withConnection(static function (ClientInterface $redis) use ($namespace): int {
-            $pattern = $namespace->asPrefix() . '*';
             $count = 0;
-            $cursor = '0';
 
-            do {
-                [$cursor, $keys] = $redis->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
-                if (!empty($keys)) {
-                    $redis->del($keys);
-                    $count += count($keys);
+            // Every spelling this namespace covers — see sweepPrefixes(). The
+            // pre-move one matters because an entry written to live forever
+            // would otherwise be unreachable AND immortal.
+            foreach ($namespace->sweepPrefixes() as $prefix) {
+                if ($prefix === '') {
+                    continue;
                 }
-            } while ($cursor !== '0');
+
+                $pattern = $prefix . '*';
+                $cursor = '0';
+                do {
+                    [$cursor, $keys] = $redis->scan($cursor, ['MATCH' => $pattern, 'COUNT' => 100]);
+                    if (!empty($keys)) {
+                        $redis->del($keys);
+                        $count += count($keys);
+                    }
+                } while ($cursor !== '0');
+            }
 
             return $count;
         });

@@ -172,11 +172,17 @@ final class RedisTagIndex implements ExternalTagIndexInterface
                 // cannot do. They get the separation the old layout had —
                 // a prefix test — which is no worse than before and applies
                 // only to entries written before this deploy.
+                // The PRE-MOVE entry spelling, not the current one: a legacy
+                // tag set was written by the version that also wrote legacy
+                // entry keys, so filtering its members by today's prefix would
+                // match none of them and quietly stop invalidating the very
+                // entries this fallback exists to reach. The root never moved,
+                // so there it is the same string either way.
                 $count += $this->flushSet(
                     $redis,
                     $namespace->legacyTagKeyPrefix() . $tag,
                     $tag,
-                    $namespace->asPrefix(),
+                    $namespace->legacyAsPrefix() ?: $namespace->asPrefix(),
                 );
             }
 

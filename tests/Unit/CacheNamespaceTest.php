@@ -30,10 +30,75 @@ final class CacheNamespaceTest extends TestCase
         self::assertSame('semitexa:myapp:prod:tenant:default:', $ns->asPrefix());
     }
 
+    /**
+     * The marker sits before the app segment, where no caller key can reach:
+     * behind the tenant, the root key `users:x` and the key `x` in `users`
+     * spelled one string. The root itself is deliberately unchanged.
+     */
     public function testAsPrefixWithNamespace(): void
     {
         $ns = $this->makeNamespace(namespace: 'users');
-        self::assertSame('semitexa:myapp:prod:tenant:default:users:', $ns->asPrefix());
+        self::assertSame('semitexa:ns:v2:myapp:prod:tenant:default:users:', $ns->asPrefix());
+    }
+
+    public function testLegacyPrefixStillNamesThePreMoveSpelling(): void
+    {
+        $ns = $this->makeNamespace(namespace: 'users');
+        self::assertSame('semitexa:myapp:prod:tenant:default:users:', $ns->legacyAsPrefix());
+        self::assertSame('', $this->makeNamespace()->legacyAsPrefix(), 'the root never moved');
+    }
+
+    /**
+     * Clearing the root clears the tenant, named namespaces included — which is
+     * what it already did, but only because the root prefix happened to be a
+     * string prefix of every named one. Now it is stated.
+     */
+    public function testTheRootSweepStillCoversNamedNamespaces(): void
+    {
+        $root = $this->makeNamespace();
+        $named = $this->makeNamespace(namespace: 'users');
+
+        $covered = static function (array $prefixes, string $key): bool {
+            foreach ($prefixes as $p) {
+                if ($p !== '' && str_starts_with($key, $p)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        self::assertTrue($covered($root->sweepPrefixes(), $named->asPrefix() . 'item'));
+        self::assertTrue($covered($root->sweepPrefixes(), $named->legacyAsPrefix() . 'item'));
+        self::assertTrue($covered($root->sweepPrefixes(), $root->asPrefix() . 'item'));
+    }
+
+    /**
+     * And the pre-move spelling is NOT in a named sweep: it and a root key
+     * starting with the namespace's name are the same bytes, so sweeping it
+     * would delete root entries it cannot tell apart — the defect itself.
+     */
+    public function testANamedSweepDoesNotIncludeTheAmbiguousLegacyPrefix(): void
+    {
+        $named = $this->makeNamespace(namespace: 'users');
+
+        self::assertNotContains($named->legacyAsPrefix(), $named->sweepPrefixes());
+        self::assertSame([$named->asPrefix()], $named->sweepPrefixes());
+    }
+
+    /** A named flush must not reach outside its own namespace. */
+    public function testANamedSweepDoesNotReachTheRootOrASibling(): void
+    {
+        $named = $this->makeNamespace(namespace: 'users');
+        $sibling = $this->makeNamespace(namespace: 'pages');
+        $root = $this->makeNamespace();
+
+        foreach ($named->sweepPrefixes() as $p) {
+            if ($p === '') {
+                continue;
+            }
+            self::assertStringStartsNotWith($p, $root->asPrefix() . 'item');
+            self::assertStringStartsNotWith($p, $sibling->asPrefix() . 'item');
+        }
     }
 
     public function testTagKeyPrefix(): void

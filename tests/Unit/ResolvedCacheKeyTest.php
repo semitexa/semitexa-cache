@@ -31,6 +31,12 @@ final class ResolvedCacheKeyTest extends TestCase
         self::assertSame('semitexa:app:test:tenant:default:my-key', $resolved->asString());
     }
 
+    /**
+     * The `ns:v2` marker sits before the app segment on purpose: a key is
+     * appended after the whole prefix and can never be spliced into it, so the
+     * root key `users:user-42` can no longer spell the same string as this one.
+     * See CacheNamespace::asPrefix(); do not move it back behind the tenant.
+     */
     public function testAsStringWithNamespace(): void
     {
         $resolved = new ResolvedCacheKey(
@@ -38,7 +44,7 @@ final class ResolvedCacheKeyTest extends TestCase
             key: 'user-42',
         );
 
-        self::assertSame('semitexa:app:test:tenant:default:users:user-42', $resolved->asString());
+        self::assertSame('semitexa:ns:v2:app:test:tenant:default:users:user-42', $resolved->asString());
     }
 
     public function testEmptyKeyThrows(): void

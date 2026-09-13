@@ -38,14 +38,22 @@ final class ArrayCacheStore implements CacheStoreInterface
 
     public function clearNamespace(CacheNamespace $namespace): int
     {
-        $prefix = $namespace->asPrefix();
+        // Every spelling this namespace covers — see sweepPrefixes(): the
+        // current one, and the pre-move one whose entries would otherwise sit
+        // unreachable if they were written to live forever.
         $count = 0;
-        foreach (array_keys($this->store) as $k) {
-            if (str_starts_with($k, $prefix)) {
-                unset($this->store[$k]);
-                $count++;
+        foreach ($namespace->sweepPrefixes() as $prefix) {
+            if ($prefix === '') {
+                continue;
+            }
+            foreach (array_keys($this->store) as $k) {
+                if (str_starts_with($k, $prefix)) {
+                    unset($this->store[$k]);
+                    $count++;
+                }
             }
         }
+
         return $count;
     }
 
