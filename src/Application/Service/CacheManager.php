@@ -64,6 +64,9 @@ final class CacheManager implements CacheManagerInterface
     #[Config(env: 'REDIS_PASSWORD', default: '')]
     protected string $redisPassword;
 
+    #[Config(env: 'CACHE_REDIS_POOL_SIZE', default: 8)]
+    protected int $redisPoolSize;
+
     /**
      * The worker's one pool owner. Non-nullable because it is registered
      * unconditionally — it answers whether Redis is configured, rather than
@@ -270,6 +273,7 @@ final class CacheManager implements CacheManagerInterface
     private function buildConfig(): CacheConfig
     {
         if (!isset(
+            $this->redisPoolSize,
             $this->driver,
             $this->prefix,
             $this->app,
@@ -300,6 +304,10 @@ final class CacheManager implements CacheManagerInterface
             redisPort: $this->redisPort,
             redisScheme: $this->redisScheme,
             redisPassword: $this->redisPassword !== '' ? $this->redisPassword : null,
+            // Carried through explicitly. Without it the config fell back to
+            // the constructor default, so an operator who set
+            // CACHE_REDIS_POOL_SIZE had it detected — and then discarded.
+            redisPoolSize: $this->redisPoolSize,
         ));
     }
 

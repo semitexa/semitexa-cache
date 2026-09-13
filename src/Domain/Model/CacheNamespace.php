@@ -31,18 +31,20 @@ final readonly class CacheNamespace
     }
 
     /**
-     * Tag sets are per NAMESPACE, not merely per tenant.
+     * Tag sets are per NAMESPACE, and live OUTSIDE the entry key space.
      *
-     * They were per tenant, and the flush filtered members by
-     * {@see self::asPrefix()}. That cannot work: the root namespace's prefix is
-     * a string prefix of every named one, and a cache key may itself contain a
-     * colon, so "root key" and "named-namespace key" are not distinguishable
-     * from the string. MEASURED: a root flush of a shared tag removed a named
-     * namespace's entry too. Putting the namespace in the key makes the
-     * separation structural instead of a guess.
+     * Two things had to change here. They were per tenant, and the flush
+     * filtered members by {@see self::asPrefix()} — which cannot separate the
+     * root namespace from a named one, because the root's prefix is a string
+     * prefix of every named one and a cache key may contain a colon of its own.
      *
-     * The `v2` segment says which layout a set belongs to. Sets written under
-     * the old one are simply never read again and expire on their own.
+     * And the marker used to sit AFTER the entry prefix, so a caller could
+     * address a tag set as an ordinary key: in namespace `views`,
+     * `put('tag:v2:foo', ...)` resolved to exactly the tag key for `foo` — an
+     * untagged put would overwrite the set, and a tagged one would write a
+     * string where the next SADD then failed with WRONGTYPE. The marker now
+     * comes BEFORE the app segment, which no caller key can reach: a key is
+     * always appended after the whole prefix, never spliced into it.
      */
     public function tagKeyPrefix(): string
     {
@@ -50,7 +52,26 @@ final readonly class CacheNamespace
         $env = $this->slugify($this->environment);
         $tenant = $this->tenantKey;
         $ns = $this->namespace !== '' ? ':' . $this->namespace : '';
-        return "{$this->prefix}:{$app}:{$env}:{$tenant}{$ns}:tag:v2:";
+        return "{$this->prefix}:tag:v2:{$app}:{$env}:{$tenant}{$ns}:";
+    }
+
+    /**
+     * Where tag memberships lived before this layout: one set per TENANT, with
+     * no namespace and no marker of its own.
+     *
+     * Kept readable so entries already in a deployed cache stay invalidatable.
+     * Nothing writes here any more; {@see \Semitexa\Cache\Application\Service\RedisTagIndex::flush()}
+     * reads it alongside the current set and prunes what it visits, so the old
+     * layout drains instead of being stranded. The version that wrote these
+     * sets never gave them a TTL, so they do not expire on their own — they
+     * have to be read or they are lost.
+     */
+    public function legacyTagKeyPrefix(): string
+    {
+        $app = $this->slugify($this->app);
+        $env = $this->slugify($this->environment);
+        $tenant = $this->tenantKey;
+        return "{$this->prefix}:{$app}:{$env}:{$tenant}:tag:";
     }
 
     private function slugify(string $value): string

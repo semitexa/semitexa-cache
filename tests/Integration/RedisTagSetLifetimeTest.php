@@ -44,7 +44,7 @@ final class RedisTagSetLifetimeTest extends TestCase
         if (!isset($this->redis)) {
             return;
         }
-        foreach ($this->redis->keys($this->prefix . '*') as $key) {
+        foreach ($this->redis->keys('*' . $this->prefix . '*') as $key) {
             $this->redis->del([$key]);
         }
     }
@@ -92,8 +92,10 @@ final class RedisTagSetLifetimeTest extends TestCase
 
     private function ttlOfTagSet(string $tag): int
     {
-        foreach ($this->redis->keys($this->prefix . '*') as $key) {
-            if (str_ends_with((string) $key, ':tag:v2:' . $tag)) {
+        // The marker sits BEFORE the app segment, where no caller key can
+        // reach: a key is appended after the whole prefix, never spliced in.
+        foreach ($this->redis->keys($this->prefix . ':tag:v2:*') as $key) {
+            if (str_ends_with((string) $key, ':' . $tag)) {
                 return (int) $this->redis->ttl($key);
             }
         }

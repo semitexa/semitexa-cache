@@ -138,61 +138,131 @@ final class RedisTagIndex implements TagIndexInterface
             $count = 0;
 
             foreach ($tags->values() as $tag) {
-                $tagKey = $this->tagKey($namespace, $tag);
-                $members = $redis->smembers($tagKey);
+                $count += $this->flushSet($redis, $this->tagKey($namespace, $tag), $tag, null);
 
-                if (empty($members)) {
-                    continue;
-                }
-
-                // One round trip for every candidate. Reading them one at a
-                // time turned a tag with N members into N sequential round
-                // trips, on a connection borrowed from the pool the rest of
-                // the worker shares.
-                $raws = $redis->mget($members);
-
-                $doomed = [];
-                $stale = [];
-
-                foreach (array_values($members) as $i => $keyStr) {
-                    $verdict = $this->verdictFor($raws[$i] ?? null, $tag);
-
-                    if ($verdict === self::CARRIES_TAG) {
-                        $doomed[] = $keyStr;
-                    } elseif ($verdict === self::NOT_OURS) {
-                        $stale[] = $keyStr;
-                    }
-                    // UNREADABLE: left in the set untouched. Pruning it would
-                    // make the entry permanently unflushable, and an entry this
-                    // process cannot decode — a rotated signing key, a worker
-                    // with a different environment — is not evidence that the
-                    // membership is wrong.
-                }
-
-                if ($doomed !== []) {
-                    $redis->del($doomed);
-                    $count += count($doomed);
-                }
-
-                $handled = array_merge($doomed, $stale);
-                if ($handled !== []) {
-                    // Only what was visited. The tag key itself is never
-                    // deleted: a member added between the SMEMBERS above and
-                    // this SREM would go with it, leaving that entry tagged and
-                    // unreachable. Removing every member empties the set, and
-                    // Redis drops an empty set on its own.
-                    $redis->srem($tagKey, $handled);
-                }
+                // The layout before this one kept ONE set per tenant, with no
+                // namespace. Entries already in a deployed cache are listed
+                // only there, and that version never gave those sets a TTL, so
+                // they do not drain by themselves — unread, those entries would
+                // simply stop being invalidatable by tag. Read alongside, and
+                // pruned as we go, so the old layout empties out.
+                //
+                // Members of that set can belong to any namespace of the
+                // tenant, and telling them apart is the very thing a prefix
+                // cannot do. They get the separation the old layout had —
+                // a prefix test — which is no worse than before and applies
+                // only to entries written before this deploy.
+                $count += $this->flushSet(
+                    $redis,
+                    $namespace->legacyTagKeyPrefix() . $tag,
+                    $tag,
+                    $namespace->asPrefix(),
+                );
             }
 
             return $count;
         });
     }
 
+    /**
+     * Flush one tag set, deleting only entries that still carry the tag AND
+     * have not changed since they were read.
+     *
+     * The classification is a read; the deletion is a write; between the two a
+     * concurrent put can replace the value and reattach its tags. Comparing the
+     * raw value inside the script closes that: a rewritten entry no longer
+     * matches what was classified, so it is neither deleted nor unlisted, and
+     * the flush leaves the new value and its fresh membership alone.
+     *
+     * @param string|null $confineToPrefix keys outside it are left untouched
+     */
+    private function flushSet(ClientInterface $redis, string $tagKey, string $tag, ?string $confineToPrefix): int
+    {
+        $members = $redis->smembers($tagKey);
+        if (empty($members)) {
+            return 0;
+        }
+
+        $members = array_values($members);
+        if ($confineToPrefix !== null) {
+            $members = array_values(array_filter(
+                $members,
+                static fn(string $k): bool => str_starts_with($k, $confineToPrefix),
+            ));
+            if ($members === []) {
+                return 0;
+            }
+        }
+
+        // One round trip for every candidate. Reading them one at a time turned
+        // a tag with N members into N sequential round trips, on a connection
+        // the rest of the worker shares.
+        $raws = $redis->mget($members);
+
+        $argv = [];
+        $acted = 0;
+        foreach ($members as $i => $keyStr) {
+            $raw = $raws[$i] ?? null;
+            $verdict = $this->verdictFor($raw, $tag);
+
+            if ($verdict === self::UNREADABLE) {
+                // Left in the set untouched. Pruning it would make the entry
+                // permanently unflushable, and an entry this process cannot
+                // decode — a rotated signing key, a worker with a different
+                // environment — is not evidence that the membership is wrong.
+                continue;
+            }
+
+            $argv[] = $keyStr;
+            $argv[] = $verdict === self::CARRIES_TAG ? '1' : '0';
+            $argv[] = is_string($raw) ? $raw : self::ABSENT;
+            $acted++;
+        }
+
+        if ($acted === 0) {
+            return 0;
+        }
+
+        return (int) $redis->eval(self::FLUSH_SCRIPT, 1, $tagKey, ...$argv);
+    }
+
     public function supportsNamespaceFlush(): bool
     {
         return true;
     }
+
+    /**
+     * Delete and unlist only what has not moved since it was classified.
+     *
+     * KEYS[1] tag set · then triples of (member, '1' when it should be deleted, the raw value seen)
+     *
+     * A member whose current value differs from the one classified was written
+     * by somebody else between the read and this call: it keeps both its value
+     * and its membership, because the new value may well carry the tag and the
+     * fresh SADD that accompanied it must not be undone. Returns how many
+     * entries were actually deleted.
+     */
+    private const FLUSH_SCRIPT = <<<'LUA'
+        local removed = 0
+        for i = 1, #ARGV, 3 do
+          local member = ARGV[i]
+          local doomed = ARGV[i + 1] == '1'
+          local seen = ARGV[i + 2]
+          local now = redis.call('GET', member)
+          local same = (now == false and seen == '\0absent') or (now ~= false and now == seen)
+          if same then
+            if doomed then
+              redis.call('DEL', member)
+              removed = removed + 1
+            end
+            redis.call('SREM', KEYS[1], member)
+          end
+        end
+        return removed
+        LUA;
+
+    /** Stands in for "there was no value", which Lua sees as false. */
+    private const ABSENT = "\0absent";
 
     private const CARRIES_TAG = 'carries';
     private const NOT_OURS = 'not-ours';

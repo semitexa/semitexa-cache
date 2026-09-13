@@ -38,7 +38,7 @@ final class CacheNamespaceTest extends TestCase
     public function testTagKeyPrefix(): void
     {
         $ns = $this->makeNamespace();
-        self::assertSame('semitexa:myapp:prod:tenant:default:tag:v2:', $ns->tagKeyPrefix());
+        self::assertSame('semitexa:tag:v2:myapp:prod:tenant:default:', $ns->tagKeyPrefix());
     }
 
     /**
@@ -51,13 +51,28 @@ final class CacheNamespaceTest extends TestCase
     public function testTagKeyPrefixSeparatesNamespaces(): void
     {
         self::assertSame(
-            'semitexa:myapp:prod:tenant:default:users:tag:v2:',
+            'semitexa:tag:v2:myapp:prod:tenant:default:users:',
             $this->makeNamespace(namespace: 'users')->tagKeyPrefix(),
         );
         self::assertNotSame(
             $this->makeNamespace()->tagKeyPrefix(),
             $this->makeNamespace(namespace: 'users')->tagKeyPrefix(),
         );
+    }
+
+    /**
+     * And the tag space is not reachable from the entry space. With the marker
+     * after the prefix, `withNamespace('views')->put('tag:v2:foo', ...)`
+     * addressed exactly the tag set for `foo`: an untagged put overwrote the
+     * set, and a tagged one left a string where the next SADD failed with
+     * WRONGTYPE. A key is always appended after the whole prefix, so a marker
+     * ahead of it cannot be produced by one.
+     */
+    public function testATagKeyCannotBeProducedByACallerKey(): void
+    {
+        $ns = $this->makeNamespace(namespace: 'views');
+
+        self::assertStringStartsNotWith($ns->asPrefix(), $ns->tagKeyPrefix());
     }
 
     /** Tenants stay separated too; the namespace is added, nothing is replaced. */
