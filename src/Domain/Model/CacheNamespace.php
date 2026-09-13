@@ -22,20 +22,38 @@ final readonly class CacheNamespace
     }
 
     /**
+     * The byte that ends a prefix and begins a caller's key.
+     *
+     * Moving the namespace marker to the front did NOT create a boundary — it
+     * only moved the ambiguity, as review showed with a case I had dismissed:
+     * two applications sharing a Redis prefix, one named `ns` in environment
+     * `v2`, and a root key carrying the rest. Both spellings produced
+     * `semitexa:ns:v2:tenant:default:tenant:default:views:item`. Reproduced
+     * before this fix.
+     *
+     * A position cannot be a boundary while the key may contain the separator.
+     * A BYTE the key may not contain can. NUL is rejected in keys
+     * ({@see ResolvedCacheKey}), never survives slugify() in app or
+     * environment, and is not a legal namespace character — so every entry
+     * string splits at its first NUL into exactly one prefix and one key, and
+     * no combination of valid values can forge another.
+     */
+    public const KEY_BOUNDARY = "\0";
+
+    /**
      * Where this namespace's ENTRIES live.
      *
-     * The namespace marker sits BEFORE the app segment, and that is the whole
-     * point. It used to sit after the tenant — `…:tenant:views:` — with the
-     * caller's key appended to it, so the root key `views:item` and the key
-     * `item` inside `views` spelled the same string and each silently
-     * overwrote the other. A key is always appended AFTER the whole prefix and
-     * can never be spliced into it, so a marker in front of the app is
-     * somewhere no key can reach. Same fix, same reason, as
-     * {@see self::tagKeyPrefix()}.
+     * The ROOT is byte-identical to what it has always been, which is most of
+     * every deployed cache and was never ambiguous with itself. A NAMED
+     * namespace ends with {@see self::KEY_BOUNDARY}, which is what makes the
+     * root key `views:item` and the key `item` inside `views` different
+     * strings: reaching the second would need a key containing NUL, and keys
+     * containing NUL are refused.
      *
-     * The ROOT namespace keeps its old spelling: it is the majority of every
-     * deployed cache, it was never ambiguous with itself, and leaving it alone
-     * means this change costs nothing there.
+     * A named prefix still sits INSIDE the root prefix, so clearing the root
+     * still clears the tenant — including for a third-party store that sweeps
+     * by asPrefix() alone, which the first version of this change quietly
+     * broke.
      */
     public function asPrefix(): string
     {
@@ -47,11 +65,11 @@ final readonly class CacheNamespace
             return "{$this->prefix}:{$app}:{$env}:{$tenant}:";
         }
 
-        return "{$this->prefix}:ns:v2:{$app}:{$env}:{$tenant}:{$this->namespace}:";
+        return "{$this->prefix}:{$app}:{$env}:{$tenant}:{$this->namespace}:" . self::KEY_BOUNDARY;
     }
 
     /**
-     * Where a NAMED namespace's entries lived before the marker moved, or ''
+     * Where a NAMED namespace's entries lived before the boundary byte, or ''
      * for the root, which never moved.
      *
      * Nothing reads entries here any more, and a flush of THIS namespace
@@ -81,58 +99,50 @@ final readonly class CacheNamespace
     /**
      * Every entry prefix a flush of this namespace has to sweep.
      *
-     * Clearing the ROOT clears the tenant — its named namespaces included.
-     * That is what clearing the root already did, but only because the root's
-     * prefix happened to be a string prefix of every named one: the same
-     * overlap this class exists to remove. It is now stated rather than
-     * inherited from an accident.
+     * One each. Clearing the ROOT clears the tenant because every named prefix
+     * begins with the root's — that is how it always behaved, and the boundary
+     * byte keeps it true instead of trading it away.
+     *
+     * The pre-boundary spelling is deliberately absent from a NAMED sweep: it
+     * and a root key beginning with the namespace's name are the same bytes,
+     * so sweeping it would delete root entries it cannot tell apart. The ROOT
+     * sweep covers it, because it sits inside the root prefix.
      *
      * @return list<string>
      */
     public function sweepPrefixes(): array
     {
-        if ($this->namespace === '') {
-            $app = $this->slugify($this->app);
-            $env = $this->slugify($this->environment);
-
-            // The second one covers every named namespace of this tenant; the
-            // first still covers the pre-move spelling, which sits inside it —
-            // which is why clearing the ROOT is what reaches a pre-move entry
-            // that would otherwise never expire.
-            return [
-                $this->asPrefix(),
-                "{$this->prefix}:ns:v2:{$app}:{$env}:{$this->tenantKey}:",
-            ];
-        }
-
-        // Only the current spelling. See legacyAsPrefix() for why the old one
-        // is not swept here.
         return [$this->asPrefix()];
     }
 
     /**
      * Tag sets are per NAMESPACE, and live OUTSIDE the entry key space.
      *
-     * Two things had to change here. They were per tenant, and the flush
-     * filtered members by {@see self::asPrefix()} — which cannot separate the
-     * root namespace from a named one, because the root's prefix is a string
-     * prefix of every named one and a cache key may contain a colon of its own.
+     * The marker before the app segment stops a CALLER KEY from addressing a
+     * tag set: in namespace `views`, `put('tag:v2:foo', ...)` used to resolve
+     * to exactly the tag key for `foo`, so an untagged put overwrote the set
+     * and a tagged one wrote a string where the next SADD failed with
+     * WRONGTYPE. That part stands.
      *
-     * And the marker used to sit AFTER the entry prefix, so a caller could
-     * address a tag set as an ordinary key: in namespace `views`,
-     * `put('tag:v2:foo', ...)` resolved to exactly the tag key for `foo` — an
-     * untagged put would overwrite the set, and a tagged one would write a
-     * string where the next SADD then failed with WRONGTYPE. The marker now
-     * comes BEFORE the app segment, which no caller key can reach: a key is
-     * always appended after the whole prefix, never spliced into it.
+     * What does NOT follow from it — and what the entry side was corrected for
+     * in review — is that the layout is unambiguous between CONFIGURATIONS. The
+     * tenant key is the one segment nothing sanitises, so a root set for tenant
+     * `t:views` and a named set for tenant `t` in namespace `views` spelled the
+     * same string. A named prefix therefore ends with
+     * {@see self::KEY_BOUNDARY}, which no tag can carry: {@see self::tagKey()}
+     * percent-encodes them.
      */
     public function tagKeyPrefix(): string
     {
         $app = $this->slugify($this->app);
         $env = $this->slugify($this->environment);
         $tenant = $this->tenantKey;
-        $ns = $this->namespace !== '' ? ':' . $this->namespace : '';
-        return "{$this->prefix}:tag:v2:{$app}:{$env}:{$tenant}{$ns}:";
+
+        if ($this->namespace === '') {
+            return "{$this->prefix}:tag:v2:{$app}:{$env}:{$tenant}:";
+        }
+
+        return "{$this->prefix}:tag:v2:{$app}:{$env}:{$tenant}:{$this->namespace}:" . self::KEY_BOUNDARY;
     }
 
     /**

@@ -32,10 +32,10 @@ final class ResolvedCacheKeyTest extends TestCase
     }
 
     /**
-     * The `ns:v2` marker sits before the app segment on purpose: a key is
-     * appended after the whole prefix and can never be spliced into it, so the
-     * root key `users:user-42` can no longer spell the same string as this one.
-     * See CacheNamespace::asPrefix(); do not move it back behind the tenant.
+     * The boundary byte is what separates the namespace from the key, so the
+     * root key `users:user-42` cannot spell the same string as this one:
+     * reaching it would need a key containing NUL, which is refused. See
+     * CacheNamespace::KEY_BOUNDARY.
      */
     public function testAsStringWithNamespace(): void
     {
@@ -44,7 +44,10 @@ final class ResolvedCacheKeyTest extends TestCase
             key: 'user-42',
         );
 
-        self::assertSame('semitexa:ns:v2:app:test:tenant:default:users:user-42', $resolved->asString());
+        self::assertSame(
+            'semitexa:app:test:tenant:default:users:' . CacheNamespace::KEY_BOUNDARY . 'user-42',
+            $resolved->asString(),
+        );
     }
 
     public function testEmptyKeyThrows(): void

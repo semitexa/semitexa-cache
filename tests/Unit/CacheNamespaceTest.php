@@ -31,14 +31,51 @@ final class CacheNamespaceTest extends TestCase
     }
 
     /**
-     * The marker sits before the app segment, where no caller key can reach:
-     * behind the tenant, the root key `users:x` and the key `x` in `users`
-     * spelled one string. The root itself is deliberately unchanged.
+     * A named prefix ends with the boundary byte, which is what makes the root
+     * key `users:x` and the key `x` in `users` different strings: reaching the
+     * second needs a key containing NUL, and those are refused. Moving a marker
+     * was not enough — review found two applications whose valid app, env and
+     * key values reproduced the marker layout exactly.
+     *
+     * The ROOT is deliberately byte-identical to what it always was.
      */
     public function testAsPrefixWithNamespace(): void
     {
         $ns = $this->makeNamespace(namespace: 'users');
-        self::assertSame('semitexa:ns:v2:myapp:prod:tenant:default:users:', $ns->asPrefix());
+        self::assertSame(
+            'semitexa:myapp:prod:tenant:default:users:' . CacheNamespace::KEY_BOUNDARY,
+            $ns->asPrefix(),
+        );
+    }
+
+    /**
+     * The case review reproduced: two applications sharing a Redis prefix, one
+     * of them named `ns` in environment `v2`, and a root key carrying the rest.
+     * Both spellings produced one string.
+     */
+    public function testTwoApplicationsSharingAPrefixCannotCollide(): void
+    {
+        $named = new CacheNamespace('semitexa', 'tenant', 'default', CacheScope::Tenant, 'tenant:default', 'views');
+        $root = new CacheNamespace('semitexa', 'ns', 'v2', CacheScope::Tenant, 'tenant:default', '');
+
+        self::assertNotSame(
+            $named->asPrefix() . 'item',
+            $root->asPrefix() . 'tenant:default:views:item',
+        );
+    }
+
+    /**
+     * The tenant key is the one segment nothing sanitises, so it could align
+     * with a namespace: tenant `t:views` against tenant `t` in namespace
+     * `views`. Entries and TAG SETS both.
+     */
+    public function testAnUnsanitisedTenantCannotImpersonateANamespace(): void
+    {
+        $rootish = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 't:views', '');
+        $named = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 't', 'views');
+
+        self::assertNotSame($rootish->asPrefix() . 'item', $named->asPrefix() . 'item');
+        self::assertNotSame($rootish->tagKey('x'), $named->tagKey('x'));
     }
 
     public function testLegacyPrefixStillNamesThePreMoveSpelling(): void
@@ -70,6 +107,26 @@ final class CacheNamespaceTest extends TestCase
         self::assertTrue($covered($root->sweepPrefixes(), $named->asPrefix() . 'item'));
         self::assertTrue($covered($root->sweepPrefixes(), $named->legacyAsPrefix() . 'item'));
         self::assertTrue($covered($root->sweepPrefixes(), $root->asPrefix() . 'item'));
+    }
+
+    /**
+     * A third-party CacheStoreInterface that clears with asPrefix() alone —
+     * the behaviour the two bundled stores had before any of this — must keep
+     * clearing named namespaces when the ROOT is flushed. The first version of
+     * this change moved named entries outside the root prefix and silently
+     * broke that for every store nobody updated; review caught it.
+     */
+    public function testANamedPrefixStillSitsInsideTheRootPrefix(): void
+    {
+        $root = $this->makeNamespace();
+        $named = $this->makeNamespace(namespace: 'users');
+
+        self::assertStringStartsWith(
+            $root->asPrefix(),
+            $named->asPrefix(),
+            'a store sweeping the root prefix alone would stop reaching this namespace',
+        );
+        self::assertStringStartsWith($root->asPrefix(), $named->asPrefix() . 'some-key');
     }
 
     /**
@@ -117,7 +174,7 @@ final class CacheNamespaceTest extends TestCase
     public function testTagKeyPrefixSeparatesNamespaces(): void
     {
         self::assertSame(
-            'semitexa:tag:v2:myapp:prod:tenant:default:users:',
+            'semitexa:tag:v2:myapp:prod:tenant:default:users:' . CacheNamespace::KEY_BOUNDARY,
             $this->makeNamespace(namespace: 'users')->tagKeyPrefix(),
         );
         self::assertNotSame(
