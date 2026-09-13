@@ -6,6 +6,7 @@ use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
 use Semitexa\Cache\Domain\Contract\CacheNamespaceResolverInterface;
 use Semitexa\Cache\Domain\Contract\CacheStoreInterface;
+use Semitexa\Cache\Domain\Contract\ExternalTagIndexInterface;
 use Semitexa\Cache\Domain\Contract\TagIndexInterface;
 use Semitexa\Cache\Domain\Enum\CacheScope;
 use Semitexa\Cache\Domain\Model\CacheEntry;
@@ -20,8 +21,11 @@ use Semitexa\Cache\Application\Service\ArrayTagIndex;
 use Semitexa\Cache\Application\Service\NullTagIndex;
 use Semitexa\Cache\Application\Service\RedisTagIndex;
 use Semitexa\Core\Attribute\Config;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Environment;
+use Semitexa\Core\Redis\RedisConnectionPool;
+use Semitexa\Core\Redis\RedisSharedPool;
 
 #[SatisfiesServiceContract(of: CacheManagerInterface::class)]
 final class CacheManager implements CacheManagerInterface
@@ -61,10 +65,23 @@ final class CacheManager implements CacheManagerInterface
     #[Config(env: 'REDIS_PASSWORD', default: '')]
     protected string $redisPassword;
 
+    #[Config(env: 'CACHE_REDIS_POOL_SIZE', default: 8)]
+    protected int $redisPoolSize;
+
+    /**
+     * The worker's one pool owner. Non-nullable because it is registered
+     * unconditionally — it answers whether Redis is configured, rather than
+     * being absent when it is not. That is what lets the cache stop opening a
+     * pool of its own without tripping the nullable-injection rule.
+     */
+    #[InjectAsReadonly]
+    protected RedisSharedPool $sharedRedis;
+
     private ?CacheConfig $config = null;
     private ?CacheStoreInterface $store = null;
     private ?TagIndexInterface $tagIndex = null;
     private ?CacheNamespaceResolverInterface $namespaceResolver = null;
+    private ?RedisConnectionPool $redisPool = null;
 
     public static function withDependencies(
         CacheConfig $config,
@@ -109,9 +126,7 @@ final class CacheManager implements CacheManagerInterface
 
     public function flushNamespace(?string $namespace = null): int
     {
-        $this->boot();
-        $ns = $this->namespaceResolver->resolve($namespace ?? '', CacheScope::Tenant);
-        return $this->store->clearNamespace($ns);
+        return $this->doFlushNamespace($namespace ?? '', CacheScope::Tenant);
     }
 
     public function withNamespace(string $namespace): ScopedCacheManager
@@ -181,7 +196,14 @@ final class CacheManager implements CacheManagerInterface
         $this->store->put($resolved, $entry);
 
         if (!$tagSet->isEmpty() && $this->config->tagsEnabled) {
-            $this->tagIndex->attach($resolved, $tagSet);
+            // An index that keeps its own keys is told how long the entry
+            // lives; one that only implements the published contract is called
+            // the way it always was. See ExternalTagIndexInterface.
+            if ($this->tagIndex instanceof ExternalTagIndexInterface) {
+                $this->tagIndex->attachWithLifetime($resolved, $tagSet, $entry->ttlSeconds);
+            } else {
+                $this->tagIndex->attach($resolved, $tagSet);
+            }
         }
     }
 
@@ -227,11 +249,32 @@ final class CacheManager implements CacheManagerInterface
     /**
      * Internal: flush namespace with explicit context (used by ScopedCacheManager).
      */
+    /**
+     * Internal: the one place a namespace is cleared.
+     *
+     * ScopedCacheManager comes straight here, so anything flushNamespace()
+     * does on its own a scoped flush does not — which is how the tag-index
+     * cleanup covered `flushNamespace('views')` and not
+     * `withNamespace('views')->flushNamespace()`. Raised in review of cache#19.
+     */
     public function doFlushNamespace(string $namespace, CacheScope $scope): int
     {
         $this->boot();
         $ns = $this->namespaceResolver->resolve($namespace, $scope);
-        return $this->store->clearNamespace($ns);
+        $cleared = $this->store->clearNamespace($ns);
+
+        // The entries are gone; the sets that named them are not, because they
+        // live outside the keyspace the store just swept. A set whose longest
+        // member never expires has no expiry of its own either, so without
+        // this it outlives everything it names and grows again from there.
+        // The return value stays a count of ENTRIES — index keys are
+        // bookkeeping, and counting them would inflate what the caller reads
+        // as "how much cache did I just drop".
+        if ($this->tagIndex instanceof ExternalTagIndexInterface) {
+            $this->tagIndex->clearNamespace($ns);
+        }
+
+        return $cleared;
     }
 
     private function boot(): void
@@ -257,6 +300,7 @@ final class CacheManager implements CacheManagerInterface
     private function buildConfig(): CacheConfig
     {
         if (!isset(
+            $this->redisPoolSize,
             $this->driver,
             $this->prefix,
             $this->app,
@@ -287,6 +331,10 @@ final class CacheManager implements CacheManagerInterface
             redisPort: $this->redisPort,
             redisScheme: $this->redisScheme,
             redisPassword: $this->redisPassword !== '' ? $this->redisPassword : null,
+            // Carried through explicitly. Without it the config fell back to
+            // the constructor default, so an operator who set
+            // CACHE_REDIS_POOL_SIZE had it detected — and then discarded.
+            redisPoolSize: $this->redisPoolSize,
         ));
     }
 
@@ -301,9 +349,54 @@ final class CacheManager implements CacheManagerInterface
     private function createStore(CacheValueSerializer $serializer): CacheStoreInterface
     {
         return match ($this->config->driver) {
-            'redis' => new RedisCacheStore($serializer, config: $this->config),
+            'redis' => new RedisCacheStore($serializer, config: $this->config, pool: $this->redisPool()),
             default => new ArrayCacheStore($serializer),
         };
+    }
+
+    /**
+     * One pool for the store and the tag index — never one each, and never a
+     * bare client, which is coroutine-fatal under Swoole.
+     *
+     * The worker's shared pool is used by default, so the cache adds no
+     * connections of its own. MEASURED before that on the dev stack
+     * 2026-09-12: 64 connections across 4 workers, 64 of 66 idle over an hour
+     * with no load — a second pool here would have been 8 more per worker for
+     * traffic the first one was plainly not carrying.
+     *
+     * UNLESS the operator asked otherwise. An explicitly set
+     * CACHE_REDIS_POOL_SIZE is a deliberate instruction about the cache's own
+     * connections, and quietly ignoring it in favour of the shared pool would
+     * undo somebody's tuning at the next deploy with no warning. Set it and
+     * the cache gets its own pool at that size; leave it unset and the cache
+     * shares.
+     *
+     * The fallback also covers two cases that are not a choice: a manager built
+     * outside the container — `new CacheManager()` in the console commands — so
+     * the typed property was never injected, and a project running
+     * CACHE_DRIVER=redis with no REDIS_HOST, which the container does not call
+     * configured at all.
+     */
+    private function redisPool(): RedisConnectionPool
+    {
+        if (isset($this->sharedRedis) && $this->sharedRedis->isConfigured() && !self::cachePoolSizeWasChosen()) {
+            return $this->sharedRedis->pool();
+        }
+
+        return $this->redisPool ??= new RedisConnectionPool($this->config->redisPoolSize, [
+            'scheme' => $this->config->redisScheme,
+            'host' => $this->config->redisHost,
+            'port' => $this->config->redisPort,
+            'password' => $this->config->redisPassword ?? '',
+        ]);
+    }
+
+    /** Did somebody set CACHE_REDIS_POOL_SIZE, as opposed to inheriting its default? */
+    private static function cachePoolSizeWasChosen(): bool
+    {
+        $chosen = Environment::getEnvValue('CACHE_REDIS_POOL_SIZE');
+
+        return is_string($chosen) && trim($chosen) !== '';
     }
 
     private function createTagIndex(): TagIndexInterface
@@ -313,30 +406,29 @@ final class CacheManager implements CacheManagerInterface
         }
 
         return match ($this->config->driver) {
-            'redis' => new RedisTagIndex($this->createRedisClient()),
+            'redis' => new RedisTagIndex(serializer: new CacheValueSerializer(), config: $this->config, pool: $this->redisPool()),
             default => $this->createArrayTagIndex(),
         };
     }
 
     private function createArrayTagIndex(): ArrayTagIndex
     {
-        /** @var ArrayCacheStore $arrayStore */
         $arrayStore = $this->store;
+        if (!$arrayStore instanceof ArrayCacheStore) {
+            // The index needs two methods that are not on CacheStoreInterface,
+            // so a store added under a non-redis driver name would otherwise
+            // fail with "undefined method" at the first TAGGED put — at
+            // runtime, on one code path, long after boot.
+            throw new \LogicException(sprintf(
+                'The array tag index needs an %s; got %s. A new store needs its own tag index, or those two seams on the contract.',
+                ArrayCacheStore::class,
+                get_debug_type($arrayStore),
+            ));
+        }
         return new ArrayTagIndex(
             deleteByString: static fn(string $k) => $arrayStore->deleteByString($k),
+            tagsOfKey: static fn(string $k) => $arrayStore->getByString($k)?->tags,
         );
     }
 
-    private function createRedisClient(): \Predis\ClientInterface
-    {
-        $params = [
-            'scheme' => $this->config->redisScheme,
-            'host' => $this->config->redisHost,
-            'port' => $this->config->redisPort,
-        ];
-        if ($this->config->redisPassword !== null) {
-            $params['password'] = $this->config->redisPassword;
-        }
-        return new \Predis\Client($params);
-    }
 }

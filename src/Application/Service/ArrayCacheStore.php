@@ -19,24 +19,7 @@ final class ArrayCacheStore implements CacheStoreInterface
 
     public function get(ResolvedCacheKey $key): ?CacheEntry
     {
-        $raw = $this->store[$key->asString()] ?? null;
-        if ($raw === null) {
-            return null;
-        }
-
-        try {
-            $entry = $this->serializer->decode($raw);
-        } catch (\Throwable) {
-            unset($this->store[$key->asString()]);
-            return null;
-        }
-
-        if ($entry->isExpiredAt(time())) {
-            unset($this->store[$key->asString()]);
-            return null;
-        }
-
-        return $entry;
+        return $this->getByString($key->asString());
     }
 
     public function put(ResolvedCacheKey $key, CacheEntry $entry): void
@@ -74,5 +57,33 @@ final class ArrayCacheStore implements CacheStoreInterface
     public function deleteByString(string $keyString): void
     {
         unset($this->store[$keyString]);
+    }
+
+    /**
+     * Read an entry by its already-resolved key string. The tag index holds raw
+     * key strings rather than {@see ResolvedCacheKey} objects, and it must be
+     * able to ask what an entry carries RIGHT NOW before deleting it — the same
+     * seam as {@see deleteByString}, in the reading direction.
+     */
+    public function getByString(string $keyString): ?CacheEntry
+    {
+        $raw = $this->store[$keyString] ?? null;
+        if ($raw === null) {
+            return null;
+        }
+
+        try {
+            $entry = $this->serializer->decode($raw);
+        } catch (\Throwable) {
+            unset($this->store[$keyString]);
+            return null;
+        }
+
+        if ($entry->isExpiredAt(time())) {
+            unset($this->store[$keyString]);
+            return null;
+        }
+
+        return $entry;
     }
 }

@@ -34,6 +34,7 @@ final class CacheManagerTest extends TestCase
         $store = new ArrayCacheStore($serializer);
         $tagIndex = new ArrayTagIndex(
             deleteByString: static fn(string $k) => $store->deleteByString($k),
+            tagsOfKey: static fn(string $k) => $store->getByString($k)?->tags,
         );
         $resolver = new DefaultCacheNamespaceResolver($config);
 
