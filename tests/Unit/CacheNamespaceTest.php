@@ -296,4 +296,54 @@ final class CacheNamespaceTest extends TestCase
             );
         }
     }
+
+    /**
+     * The boundary byte is only a boundary while nothing ahead of it can
+     * contain one. `app` and `environment` are slugified and `namespace` is
+     * checked, but the TENANT KEY is taken verbatim from TenantContext — a
+     * custom resolver, and ultimately a request. A tenant key of
+     * `tenant:t:views:\0part` reproduces the layout of tenant `tenant:t` in
+     * namespace `views` exactly: a cross-tenant read and overwrite through the
+     * very byte that was supposed to prevent one. Raised in review of cache#20.
+     */
+    #[Test]
+    public function a_tenant_key_cannot_carry_the_boundary_byte(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('NUL byte');
+
+        new CacheNamespace(
+            'semitexa',
+            'app',
+            'test',
+            CacheScope::Tenant,
+            "tenant:t:views:" . CacheNamespace::KEY_BOUNDARY . "part",
+            '',
+        );
+    }
+
+    /** The configured prefix is verbatim too. */
+    #[Test]
+    public function a_prefix_cannot_carry_the_boundary_byte(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        new CacheNamespace(
+            "semitexa" . CacheNamespace::KEY_BOUNDARY,
+            'app',
+            'test',
+            CacheScope::Tenant,
+            'tenant:default',
+            '',
+        );
+    }
+
+    /** An ordinary tenant key with colons in it is still perfectly fine. */
+    #[Test]
+    public function an_ordinary_tenant_key_is_untouched(): void
+    {
+        $ns = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 'tenant:abc:123', '');
+
+        self::assertSame('semitexa:app:test:tenant:abc:123:', $ns->asPrefix());
+    }
 }

@@ -19,6 +19,22 @@ final readonly class CacheNamespace
                 "Cache namespace '{$namespace}' contains invalid characters. Use only alphanumeric, dash, or underscore."
             );
         }
+
+        // The boundary byte is only a boundary while NOTHING that goes ahead of
+        // it can contain one. `app` and `environment` are slugified and
+        // `namespace` is checked above, but `prefix` and `tenantKey` are taken
+        // verbatim -- and `tenantKey` comes from TenantContext, i.e. from a
+        // custom resolver or, ultimately, a request. A tenant key of
+        // `tenant:t:views:\0part` reproduces the layout of tenant `tenant:t`
+        // in namespace `views` exactly, which is a cross-tenant read and
+        // overwrite. Raised in review of cache#20.
+        foreach (['prefix' => $prefix, 'tenant key' => $tenantKey] as $label => $component) {
+            if (str_contains($component, self::KEY_BOUNDARY)) {
+                throw new \InvalidArgumentException(
+                    "Cache {$label} may not contain a NUL byte: it is the boundary between a prefix and a caller's key."
+                );
+            }
+        }
     }
 
     /**

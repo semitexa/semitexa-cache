@@ -178,6 +178,24 @@ final class RedisTagIndex implements ExternalTagIndexInterface
                 // match none of them and quietly stop invalidating the very
                 // entries this fallback exists to reach. The root never moved,
                 // so there it is the same string either way.
+                //
+                // And ONLY from the root. For a named namespace the legacy
+                // prefix is `...:{tenant}:{namespace}:`, which is byte-for-byte
+                // what a ROOT key whose caller key begins with `{namespace}:`
+                // spells -- the ambiguity this whole change removes. Draining
+                // from a named flush therefore deleted root entries of the same
+                // tenant that it could not tell apart: a flush of `views`
+                // removing a root entry keyed `views:item`. A root flush covers
+                // the whole tenant, so its filter is not separating anything
+                // and cannot make that mistake. Named-namespace entries written
+                // before this deploy stay listed in the legacy set until a root
+                // flush drains it, or expire on their own TTL -- a cold entry
+                // is a cold start; a deleted root entry is somebody else's data.
+                // Raised in review of cache#20.
+                if ($namespace->namespace !== '') {
+                    continue;
+                }
+
                 $count += $this->flushSet(
                     $redis,
                     $namespace->legacyTagKeyPrefix() . $tag,
