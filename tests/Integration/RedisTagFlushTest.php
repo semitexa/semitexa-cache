@@ -254,6 +254,35 @@ final class RedisTagFlushTest extends TestCase
         self::assertSame([], array_values($this->redis->smembers($ns->legacyTagKeyPrefix() . 'tag')), 'and the old set drains');
     }
 
+    /**
+     * The legacy tag set is TENANT-WIDE, with no namespace in it at all, so a
+     * named flush confined its members by the pre-move entry prefix
+     * `...:{tenant}:views:` -- which is byte-for-byte what a ROOT key whose
+     * caller key begins with `views:` spells. Flushing the namespace `views`
+     * therefore deleted the root entry `views:item` of the same tenant: the
+     * ambiguity this layout removes, still live in the fallback path. The
+     * drain now runs only from the root, where the filter separates nothing
+     * and cannot mistake one for the other. Raised in review of cache#20.
+     */
+    public function testANamedFlushDoesNotDrainTheAmbiguousLegacySet(): void
+    {
+        $root = $this->namespaceFor();
+        $views = $this->namespaceFor('views');
+
+        // A ROOT entry whose caller key happens to start with the namespace's
+        // name -- `views:item` -- listed where the previous version kept it.
+        $rootKey = $this->seed($root, 'views:item', 'somebody elses data', ['tag']);
+        $this->redis->del([$root->tagKeyPrefix() . 'tag']);
+        $this->redis->sadd($views->legacyTagKeyPrefix() . 'tag', [$rootKey]);
+
+        self::assertSame(0, $this->index()->flush($views, new TagSet(['tag'])));
+        self::assertSame('somebody elses data', $this->valueAt($rootKey), 'a flush of views must not reach it');
+
+        // And the root, which owns it, still can.
+        self::assertSame(1, $this->index()->flush($root, new TagSet(['tag'])));
+        self::assertNull($this->valueAt($rootKey));
+    }
+
     public function testFlushingOneNamespaceLeavesAnotherAlone(): void
     {
         $a = $this->namespaceFor('nsa');

@@ -30,10 +30,132 @@ final class CacheNamespaceTest extends TestCase
         self::assertSame('semitexa:myapp:prod:tenant:default:', $ns->asPrefix());
     }
 
+    /**
+     * A named prefix ends with the boundary byte, which is what makes the root
+     * key `users:x` and the key `x` in `users` different strings: reaching the
+     * second needs a key containing NUL, and those are refused. Moving a marker
+     * was not enough — review found two applications whose valid app, env and
+     * key values reproduced the marker layout exactly.
+     *
+     * The ROOT is deliberately byte-identical to what it always was.
+     */
     public function testAsPrefixWithNamespace(): void
     {
         $ns = $this->makeNamespace(namespace: 'users');
-        self::assertSame('semitexa:myapp:prod:tenant:default:users:', $ns->asPrefix());
+        self::assertSame(
+            'semitexa:myapp:prod:tenant:default:users:' . CacheNamespace::KEY_BOUNDARY,
+            $ns->asPrefix(),
+        );
+    }
+
+    /**
+     * The case review reproduced: two applications sharing a Redis prefix, one
+     * of them named `ns` in environment `v2`, and a root key carrying the rest.
+     * Both spellings produced one string.
+     */
+    public function testTwoApplicationsSharingAPrefixCannotCollide(): void
+    {
+        $named = new CacheNamespace('semitexa', 'tenant', 'default', CacheScope::Tenant, 'tenant:default', 'views');
+        $root = new CacheNamespace('semitexa', 'ns', 'v2', CacheScope::Tenant, 'tenant:default', '');
+
+        self::assertNotSame(
+            $named->asPrefix() . 'item',
+            $root->asPrefix() . 'tenant:default:views:item',
+        );
+    }
+
+    /**
+     * The tenant key is the one segment nothing sanitises, so it could align
+     * with a namespace: tenant `t:views` against tenant `t` in namespace
+     * `views`. Entries and TAG SETS both.
+     */
+    public function testAnUnsanitisedTenantCannotImpersonateANamespace(): void
+    {
+        $rootish = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 't:views', '');
+        $named = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 't', 'views');
+
+        self::assertNotSame($rootish->asPrefix() . 'item', $named->asPrefix() . 'item');
+        self::assertNotSame($rootish->tagKey('x'), $named->tagKey('x'));
+    }
+
+    public function testLegacyPrefixStillNamesThePreMoveSpelling(): void
+    {
+        $ns = $this->makeNamespace(namespace: 'users');
+        self::assertSame('semitexa:myapp:prod:tenant:default:users:', $ns->legacyAsPrefix());
+        self::assertSame('', $this->makeNamespace()->legacyAsPrefix(), 'the root never moved');
+    }
+
+    /**
+     * Clearing the root clears the tenant, named namespaces included — which is
+     * what it already did, but only because the root prefix happened to be a
+     * string prefix of every named one. Now it is stated.
+     */
+    public function testTheRootSweepStillCoversNamedNamespaces(): void
+    {
+        $root = $this->makeNamespace();
+        $named = $this->makeNamespace(namespace: 'users');
+
+        $covered = static function (array $prefixes, string $key): bool {
+            foreach ($prefixes as $p) {
+                if ($p !== '' && str_starts_with($key, $p)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        self::assertTrue($covered($root->sweepPrefixes(), $named->asPrefix() . 'item'));
+        self::assertTrue($covered($root->sweepPrefixes(), $named->legacyAsPrefix() . 'item'));
+        self::assertTrue($covered($root->sweepPrefixes(), $root->asPrefix() . 'item'));
+    }
+
+    /**
+     * A third-party CacheStoreInterface that clears with asPrefix() alone —
+     * the behaviour the two bundled stores had before any of this — must keep
+     * clearing named namespaces when the ROOT is flushed. The first version of
+     * this change moved named entries outside the root prefix and silently
+     * broke that for every store nobody updated; review caught it.
+     */
+    public function testANamedPrefixStillSitsInsideTheRootPrefix(): void
+    {
+        $root = $this->makeNamespace();
+        $named = $this->makeNamespace(namespace: 'users');
+
+        self::assertStringStartsWith(
+            $root->asPrefix(),
+            $named->asPrefix(),
+            'a store sweeping the root prefix alone would stop reaching this namespace',
+        );
+        self::assertStringStartsWith($root->asPrefix(), $named->asPrefix() . 'some-key');
+    }
+
+    /**
+     * And the pre-move spelling is NOT in a named sweep: it and a root key
+     * starting with the namespace's name are the same bytes, so sweeping it
+     * would delete root entries it cannot tell apart — the defect itself.
+     */
+    public function testANamedSweepDoesNotIncludeTheAmbiguousLegacyPrefix(): void
+    {
+        $named = $this->makeNamespace(namespace: 'users');
+
+        self::assertNotContains($named->legacyAsPrefix(), $named->sweepPrefixes());
+        self::assertSame([$named->asPrefix()], $named->sweepPrefixes());
+    }
+
+    /** A named flush must not reach outside its own namespace. */
+    public function testANamedSweepDoesNotReachTheRootOrASibling(): void
+    {
+        $named = $this->makeNamespace(namespace: 'users');
+        $sibling = $this->makeNamespace(namespace: 'pages');
+        $root = $this->makeNamespace();
+
+        foreach ($named->sweepPrefixes() as $p) {
+            if ($p === '') {
+                continue;
+            }
+            self::assertStringStartsNotWith($p, $root->asPrefix() . 'item');
+            self::assertStringStartsNotWith($p, $sibling->asPrefix() . 'item');
+        }
     }
 
     public function testTagKeyPrefix(): void
@@ -52,7 +174,7 @@ final class CacheNamespaceTest extends TestCase
     public function testTagKeyPrefixSeparatesNamespaces(): void
     {
         self::assertSame(
-            'semitexa:tag:v2:myapp:prod:tenant:default:users:',
+            'semitexa:tag:v2:myapp:prod:tenant:default:users:' . CacheNamespace::KEY_BOUNDARY,
             $this->makeNamespace(namespace: 'users')->tagKeyPrefix(),
         );
         self::assertNotSame(
@@ -173,5 +295,55 @@ final class CacheNamespaceTest extends TestCase
                 'the key has to name exactly one tag, and say which',
             );
         }
+    }
+
+    /**
+     * The boundary byte is only a boundary while nothing ahead of it can
+     * contain one. `app` and `environment` are slugified and `namespace` is
+     * checked, but the TENANT KEY is taken verbatim from TenantContext — a
+     * custom resolver, and ultimately a request. A tenant key of
+     * `tenant:t:views:\0part` reproduces the layout of tenant `tenant:t` in
+     * namespace `views` exactly: a cross-tenant read and overwrite through the
+     * very byte that was supposed to prevent one. Raised in review of cache#20.
+     */
+    #[Test]
+    public function a_tenant_key_cannot_carry_the_boundary_byte(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('NUL byte');
+
+        new CacheNamespace(
+            'semitexa',
+            'app',
+            'test',
+            CacheScope::Tenant,
+            "tenant:t:views:" . CacheNamespace::KEY_BOUNDARY . "part",
+            '',
+        );
+    }
+
+    /** The configured prefix is verbatim too. */
+    #[Test]
+    public function a_prefix_cannot_carry_the_boundary_byte(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        new CacheNamespace(
+            "semitexa" . CacheNamespace::KEY_BOUNDARY,
+            'app',
+            'test',
+            CacheScope::Tenant,
+            'tenant:default',
+            '',
+        );
+    }
+
+    /** An ordinary tenant key with colons in it is still perfectly fine. */
+    #[Test]
+    public function an_ordinary_tenant_key_is_untouched(): void
+    {
+        $ns = new CacheNamespace('semitexa', 'app', 'test', CacheScope::Tenant, 'tenant:abc:123', '');
+
+        self::assertSame('semitexa:app:test:tenant:abc:123:', $ns->asPrefix());
     }
 }
