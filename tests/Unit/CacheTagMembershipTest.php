@@ -2,6 +2,7 @@
 declare(strict_types=1);
 namespace Semitexa\Cache\Tests\Unit;
 
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Cache\Application\Service\ArrayCacheStore;
 use Semitexa\Cache\Application\Service\ArrayTagIndex;
@@ -127,4 +128,58 @@ final class CacheTagMembershipTest extends TestCase
         self::assertSame(1, $manager->flushTags('two'));
         self::assertNull($manager->get('item'));
     }
+
+    /**
+     * The root namespace is a string PREFIX of every named one, and a cache key
+     * may itself contain a colon — so no amount of prefix matching can tell
+     * "root key" from "named-namespace key". This is why the tag key carries
+     * the namespace rather than the flush filtering by it.
+     *
+     * MEASURED before the fix: a root flush of a shared tag removed 2 entries
+     * and left the named namespace's value NULL.
+     */
+    #[Test]
+    public function a_root_flush_does_not_reach_into_a_named_namespace(): void
+    {
+        $manager = $this->makeManager();
+        $manager->put('item', 'ROOT', tags: ['shared']);
+        $manager->withNamespace('views')->put('item', 'VIEWS', tags: ['shared']);
+
+        self::assertSame(1, $manager->flushTags('shared'), 'only the root entry carried the tag in this namespace');
+        self::assertSame('VIEWS', $manager->withNamespace('views')->get('item'), 'a named namespace is not the root namespace');
+    }
+
+    #[Test]
+    public function a_named_namespace_flush_does_not_reach_into_the_root(): void
+    {
+        $manager = $this->makeManager();
+        $manager->put('item', 'ROOT', tags: ['shared']);
+        $manager->withNamespace('views')->put('item', 'VIEWS', tags: ['shared']);
+
+        self::assertSame(1, $manager->withNamespace('views')->flushTags('shared'));
+        self::assertSame('ROOT', $manager->get('item'));
+    }
+
+    /**
+     * The two tag SETS are separate even when the keys look alike.
+     *
+     * This started life asserting that the two VALUES survive each other, and
+     * failed for a reason that has nothing to do with tags: root key
+     * 'views:item' and key 'item' inside namespace 'views' resolve to the same
+     * store key, so there was only ever one entry. That is a separate defect —
+     * see tk-cache-namespace-key-collision — and the part this change is
+     * responsible for is asserted here instead.
+     */
+    #[Test]
+    public function the_two_namespaces_keep_separate_tag_sets(): void
+    {
+        $manager = $this->makeManager();
+        $manager->put('root-item', 'ROOT', tags: ['shared']);
+        $manager->withNamespace('views')->put('view-item', 'VIEWS', tags: ['shared']);
+
+        self::assertSame(1, $manager->withNamespace('views')->flushTags('shared'));
+        self::assertSame('ROOT', $manager->get('root-item'), 'the root set was never touched');
+        self::assertSame(1, $manager->flushTags('shared'), 'and it is still flushable on its own');
+    }
+
 }

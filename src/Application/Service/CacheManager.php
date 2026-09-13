@@ -323,26 +323,28 @@ final class CacheManager implements CacheManagerInterface
      * One pool for the store and the tag index — never one each, and never a
      * bare client, which is coroutine-fatal under Swoole.
      *
-     * The worker's shared pool is used whenever Redis is configured, so the
-     * cache adds no connections of its own. MEASURED before that on the dev
-     * stack 2026-09-12: 64 connections across 4 workers, 64 of 66 idle over an
-     * hour with no load — a second pool here would have been 8 more per worker
-     * for traffic the first one was plainly not carrying.
+     * The worker's shared pool is used by default, so the cache adds no
+     * connections of its own. MEASURED before that on the dev stack
+     * 2026-09-12: 64 connections across 4 workers, 64 of 66 idle over an hour
+     * with no load — a second pool here would have been 8 more per worker for
+     * traffic the first one was plainly not carrying.
      *
-     * Sharing cannot starve anyone: RedisConnectionPool::get() waits at most 2s
-     * and then hands out an over-cap client, so a long flush holding a borrowed
-     * connection costs an extra socket, not a stalled coroutine.
+     * UNLESS the operator asked otherwise. An explicitly set
+     * CACHE_REDIS_POOL_SIZE is a deliberate instruction about the cache's own
+     * connections, and quietly ignoring it in favour of the shared pool would
+     * undo somebody's tuning at the next deploy with no warning. Set it and
+     * the cache gets its own pool at that size; leave it unset and the cache
+     * shares.
      *
-     * The fallback covers two cases. One: this manager was built outside the
-     * container — `new CacheManager()` in the console commands — so the typed
-     * property was never injected and `isset` is false. Two: the container
-     * calls Redis "configured" only when REDIS_HOST is set, while this class
-     * defaults it to 127.0.0.1, so a project running CACHE_DRIVER=redis with no
-     * REDIS_HOST still gets a working cache, at the cost of its own pool.
+     * The fallback also covers two cases that are not a choice: a manager built
+     * outside the container — `new CacheManager()` in the console commands — so
+     * the typed property was never injected, and a project running
+     * CACHE_DRIVER=redis with no REDIS_HOST, which the container does not call
+     * configured at all.
      */
     private function redisPool(): RedisConnectionPool
     {
-        if (isset($this->sharedRedis) && $this->sharedRedis->isConfigured()) {
+        if (isset($this->sharedRedis) && $this->sharedRedis->isConfigured() && !self::cachePoolSizeWasChosen()) {
             return $this->sharedRedis->pool();
         }
 
@@ -352,6 +354,14 @@ final class CacheManager implements CacheManagerInterface
             'port' => $this->config->redisPort,
             'password' => $this->config->redisPassword ?? '',
         ]);
+    }
+
+    /** Did somebody set CACHE_REDIS_POOL_SIZE, as opposed to inheriting its default? */
+    private static function cachePoolSizeWasChosen(): bool
+    {
+        $chosen = Environment::getEnvValue('CACHE_REDIS_POOL_SIZE');
+
+        return is_string($chosen) && trim($chosen) !== '';
     }
 
     private function createTagIndex(): TagIndexInterface
@@ -368,8 +378,18 @@ final class CacheManager implements CacheManagerInterface
 
     private function createArrayTagIndex(): ArrayTagIndex
     {
-        /** @var ArrayCacheStore $arrayStore */
         $arrayStore = $this->store;
+        if (!$arrayStore instanceof ArrayCacheStore) {
+            // The index needs two methods that are not on CacheStoreInterface,
+            // so a store added under a non-redis driver name would otherwise
+            // fail with "undefined method" at the first TAGGED put — at
+            // runtime, on one code path, long after boot.
+            throw new \LogicException(sprintf(
+                'The array tag index needs an %s; got %s. A new store needs its own tag index, or those two seams on the contract.',
+                ArrayCacheStore::class,
+                get_debug_type($arrayStore),
+            ));
+        }
         return new ArrayTagIndex(
             deleteByString: static fn(string $k) => $arrayStore->deleteByString($k),
             tagsOfKey: static fn(string $k) => $arrayStore->getByString($k)?->tags,

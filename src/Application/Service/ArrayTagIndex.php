@@ -11,6 +11,11 @@ use Semitexa\Cache\Domain\Model\TagSet;
  * In-memory tag index for array driver. Development and test use only.
  * Does not persist across requests or workers.
  *
+ * Keyed by the namespace's TAG KEY, not by the bare tag: the root namespace's
+ * prefix is a string prefix of every named one and a cache key may contain a
+ * colon, so no filtering of members by prefix can separate them. The Redis
+ * index is keyed the same way, for the same reason.
+ *
  * The index is a list of CANDIDATES, not a statement of fact. Membership is
  * written on put and never rewritten, so it goes stale the moment an entry is
  * overwritten with a different tag set or dies of its own TTL. Deletion
@@ -20,7 +25,7 @@ use Semitexa\Cache\Domain\Model\TagSet;
  */
 final class ArrayTagIndex implements TagIndexInterface
 {
-    /** @var array<string, list<string>> tag => list of resolved key strings */
+    /** @var array<string, list<string>> namespaced tag key => list of resolved key strings */
     private array $index = [];
 
     /**
@@ -41,13 +46,14 @@ final class ArrayTagIndex implements TagIndexInterface
     {
         $keyStr = $key->asString();
         foreach ($tags->values() as $tag) {
+            $tagKey = $key->namespace->tagKeyPrefix() . $tag;
             // Re-attaching the same key under the same tag is a no-op: a set,
             // not a log. Without this a key rewritten N times is counted N
             // times by flush() and walked N times on every invalidation.
-            if (in_array($keyStr, $this->index[$tag] ?? [], true)) {
+            if (in_array($keyStr, $this->index[$tagKey] ?? [], true)) {
                 continue;
             }
-            $this->index[$tag][] = $keyStr;
+            $this->index[$tagKey][] = $keyStr;
         }
     }
 
@@ -55,9 +61,10 @@ final class ArrayTagIndex implements TagIndexInterface
     {
         $keyStr = $key->asString();
         foreach ($tags->values() as $tag) {
-            if (isset($this->index[$tag])) {
-                $this->index[$tag] = array_values(
-                    array_filter($this->index[$tag], static fn(string $k) => $k !== $keyStr)
+            $tagKey = $key->namespace->tagKeyPrefix() . $tag;
+            if (isset($this->index[$tagKey])) {
+                $this->index[$tagKey] = array_values(
+                    array_filter($this->index[$tagKey], static fn(string $k) => $k !== $keyStr)
                 );
             }
         }
@@ -65,29 +72,27 @@ final class ArrayTagIndex implements TagIndexInterface
 
     public function flush(CacheNamespace $namespace, TagSet $tags): int
     {
-        $prefix = $namespace->asPrefix();
         $count = 0;
 
         foreach ($tags->values() as $tag) {
-            $members = $this->index[$tag] ?? [];
+            $tagKey = $namespace->tagKeyPrefix() . $tag;
+            $members = $this->index[$tagKey] ?? [];
             if ($members === []) {
                 continue;
             }
 
+            // Every member of this set belongs to this namespace by
+            // construction, so there is nothing to filter — only to verify.
             $kept = [];
             foreach ($members as $keyStr) {
-                if (!str_starts_with($keyStr, $prefix)) {
-                    // Another namespace's key under the same tag. Not ours to
-                    // delete, and not ours to forget either: dropping it here
-                    // is what left that namespace unable to flush its own tag.
-                    $kept[] = $keyStr;
+                $current = ($this->tagsOfKey)($keyStr);
+                if ($current === null) {
+                    // Gone already. Prune the stale member.
                     continue;
                 }
-
-                $current = ($this->tagsOfKey)($keyStr);
-                if ($current === null || !in_array($tag, $current->values(), true)) {
-                    // Gone, or rewritten without this tag. Prune the stale
-                    // member; the value itself is none of this tag's business.
+                if (!in_array($tag, $current->values(), true)) {
+                    // Rewritten without this tag; the value is not this tag's
+                    // business, and the membership is what is out of date.
                     continue;
                 }
 
@@ -96,9 +101,9 @@ final class ArrayTagIndex implements TagIndexInterface
             }
 
             if ($kept === []) {
-                unset($this->index[$tag]);
+                unset($this->index[$tagKey]);
             } else {
-                $this->index[$tag] = $kept;
+                $this->index[$tagKey] = $kept;
             }
         }
 

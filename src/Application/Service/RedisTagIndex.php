@@ -22,8 +22,8 @@ use Semitexa\Core\Redis\RedisConnectionPool;
  * pool is normally SHARED with the store rather than duplicated.
  *
  * One borrow spans a whole attach/detach/flush, not a single command: flush
- * issues SMEMBERS, a GET per candidate, DEL and SREM, and those must not be
- * interleaved with another coroutine's traffic on the same socket.
+ * issues SMEMBERS, one MGET over the candidates, DEL and SREM, and those must
+ * not be interleaved with another coroutine's traffic on the same socket.
  *
  * A tag set carries an expiry covering its longest-lived member, so a tag that
  * nobody ever flushes cannot grow forever; flush() prunes members it has
@@ -34,16 +34,45 @@ use Semitexa\Core\Redis\RedisConnectionPool;
  * since been overwritten with different tags or has expired. Deletion re-reads
  * the entry and removes it only if it still carries the tag being flushed.
  *
- * Two namespaces of the same tenant currently share one tag key, because
- * {@see CacheNamespace::tagKeyPrefix()} does not include the namespace. Until
- * that changes, flush() must filter members by the namespace prefix or a flush
- * in one namespace deletes another's entries.
+ * Tag sets are per NAMESPACE — see {@see CacheNamespace::tagKeyPrefix()}. They
+ * were per tenant, and flush() filtered members by the namespace prefix
+ * instead; that could not separate the root namespace from a named one,
+ * because the root's prefix is a string prefix of every named one. Every
+ * member of a set now belongs to that namespace by construction, so there is
+ * nothing left to filter.
  */
 final class RedisTagIndex implements TagIndexInterface
 {
-    /** Redis TTL replies: the key is gone, and the key exists but never expires. */
-    private const TTL_NO_KEY = -2;
-    private const TTL_NO_EXPIRY = -1;
+    /**
+     * Add a member and give the set a lifetime that covers it — atomically.
+     *
+     * The TTL is read BEFORE the SADD, and that ordering is the whole point:
+     * afterwards a brand-new set and a deliberately immortal one both answer
+     * -1, and Redis has no primitive that tells them apart. Reading first
+     * distinguishes them (-2 is "no such key"), and doing it inside one script
+     * closes the window that made the read useless — two coroutines attaching
+     * to the same tag could otherwise each see a state the other had just
+     * created, and settle on the SHORTER lifetime, leaving the longer-lived
+     * member unflushable once the set expired under it.
+     *
+     * KEYS[1] tag set · ARGV[1] member · ARGV[2] ttl seconds · ARGV[3] 1 when the entry never expires
+     */
+    private const ATTACH_SCRIPT = <<<'LUA'
+        local prior = redis.call('TTL', KEYS[1])
+        redis.call('SADD', KEYS[1], ARGV[1])
+        if ARGV[3] == '1' then
+          redis.call('PERSIST', KEYS[1])
+          return -1
+        end
+        if prior == -1 then
+          return -1
+        end
+        local ttl = tonumber(ARGV[2])
+        if prior == -2 or prior < ttl then
+          redis.call('EXPIRE', KEYS[1], ttl)
+        end
+        return ttl
+        LUA;
 
     private readonly ?ClientInterface $client;
     private readonly ?RedisConnectionPool $pool;
@@ -79,34 +108,17 @@ final class RedisTagIndex implements TagIndexInterface
     public function attach(ResolvedCacheKey $key, TagSet $tags, ?int $ttlSeconds = null): void
     {
         $this->withConnection(function (ClientInterface $redis) use ($key, $tags, $ttlSeconds): void {
-            $forever = $ttlSeconds === null || $ttlSeconds <= 0;
+            $forever = $ttlSeconds === null || $ttlSeconds <= 0 ? 1 : 0;
 
             foreach ($tags->values() as $tag) {
-                $tagKey = $this->tagKey($key->namespace, $tag);
-
-                // Read the expiry BEFORE writing: afterwards a brand-new set and
-                // a deliberately immortal one both answer -1, and Redis has no
-                // primitive that tells them apart. One extra command per tag per
-                // put buys that distinction; the alternative is a set that
-                // either outlives everything it names or dies before it.
-                $priorTtl = (int) $redis->ttl($tagKey);
-
-                $redis->sadd($tagKey, [$key->asString()]);
-
-                if ($forever) {
-                    // The set must now outlive an entry that never expires.
-                    $redis->persist($tagKey);
-                    continue;
-                }
-
-                if ($priorTtl === self::TTL_NO_EXPIRY) {
-                    // Already immortal because some member is. Leave it.
-                    continue;
-                }
-
-                if ($priorTtl === self::TTL_NO_KEY || $priorTtl < $ttlSeconds) {
-                    $redis->expire($tagKey, $ttlSeconds);
-                }
+                $redis->eval(
+                    self::ATTACH_SCRIPT,
+                    1,
+                    $this->tagKey($key->namespace, $tag),
+                    $key->asString(),
+                    (string) ($ttlSeconds ?? 0),
+                    (string) $forever,
+                );
             }
         });
     }
@@ -123,7 +135,6 @@ final class RedisTagIndex implements TagIndexInterface
     public function flush(CacheNamespace $namespace, TagSet $tags): int
     {
         return $this->withConnection(function (ClientInterface $redis) use ($namespace, $tags): int {
-            $prefix = $namespace->asPrefix();
             $count = 0;
 
             foreach ($tags->values() as $tag) {
@@ -134,22 +145,28 @@ final class RedisTagIndex implements TagIndexInterface
                     continue;
                 }
 
+                // One round trip for every candidate. Reading them one at a
+                // time turned a tag with N members into N sequential round
+                // trips, on a connection borrowed from the pool the rest of
+                // the worker shares.
+                $raws = $redis->mget($members);
+
                 $doomed = [];
                 $stale = [];
-                $foreign = 0;
 
-                foreach ($members as $keyStr) {
-                    if (!str_starts_with($keyStr, $prefix)) {
-                        // Belongs to another namespace sharing this tag key.
-                        $foreign++;
-                        continue;
-                    }
+                foreach (array_values($members) as $i => $keyStr) {
+                    $verdict = $this->verdictFor($raws[$i] ?? null, $tag);
 
-                    if ($this->stillCarries($redis, $keyStr, $tag)) {
+                    if ($verdict === self::CARRIES_TAG) {
                         $doomed[] = $keyStr;
-                    } else {
+                    } elseif ($verdict === self::NOT_OURS) {
                         $stale[] = $keyStr;
                     }
+                    // UNREADABLE: left in the set untouched. Pruning it would
+                    // make the entry permanently unflushable, and an entry this
+                    // process cannot decode — a rotated signing key, a worker
+                    // with a different environment — is not evidence that the
+                    // membership is wrong.
                 }
 
                 if ($doomed !== []) {
@@ -159,11 +176,12 @@ final class RedisTagIndex implements TagIndexInterface
 
                 $handled = array_merge($doomed, $stale);
                 if ($handled !== []) {
+                    // Only what was visited. The tag key itself is never
+                    // deleted: a member added between the SMEMBERS above and
+                    // this SREM would go with it, leaving that entry tagged and
+                    // unreachable. Removing every member empties the set, and
+                    // Redis drops an empty set on its own.
                     $redis->srem($tagKey, $handled);
-                }
-
-                if ($foreign === 0) {
-                    $redis->del([$tagKey]);
                 }
             }
 
@@ -176,29 +194,34 @@ final class RedisTagIndex implements TagIndexInterface
         return true;
     }
 
+    private const CARRIES_TAG = 'carries';
+    private const NOT_OURS = 'not-ours';
+    private const UNREADABLE = 'unreadable';
+
     /**
-     * Does the entry behind this raw key still carry the tag being flushed?
-     * A key that is gone, undecodable or expired answers no — the member is
-     * stale and gets pruned rather than obeyed.
+     * What a stored value says about its membership of $tag.
+     *
+     * Three answers, not two. "Gone" and "no longer tagged" both mean the
+     * membership is stale and may be pruned. "Unreadable" means this process
+     * cannot tell — and must therefore neither delete the entry nor forget it.
      */
-    private function stillCarries(ClientInterface $redis, string $keyStr, string $tag): bool
+    private function verdictFor(mixed $raw, string $tag): string
     {
-        $raw = $redis->get($keyStr);
-        if ($raw === null || $raw === '') {
-            return false;
+        if (!is_string($raw) || $raw === '') {
+            return self::NOT_OURS; // gone: the entry gave up before the tag did
         }
 
         try {
             $entry = $this->serializer->decode($raw);
         } catch (\Throwable) {
-            return false;
+            return self::UNREADABLE;
         }
 
         if ($entry->isExpiredAt(time())) {
-            return false;
+            return self::NOT_OURS;
         }
 
-        return in_array($tag, $entry->tags->values(), true);
+        return in_array($tag, $entry->tags->values(), true) ? self::CARRIES_TAG : self::NOT_OURS;
     }
 
     private function tagKey(CacheNamespace $namespace, string $tag): string

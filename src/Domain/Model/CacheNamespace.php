@@ -30,12 +30,27 @@ final readonly class CacheNamespace
         return "{$this->prefix}:{$app}:{$env}:{$tenant}{$ns}:";
     }
 
+    /**
+     * Tag sets are per NAMESPACE, not merely per tenant.
+     *
+     * They were per tenant, and the flush filtered members by
+     * {@see self::asPrefix()}. That cannot work: the root namespace's prefix is
+     * a string prefix of every named one, and a cache key may itself contain a
+     * colon, so "root key" and "named-namespace key" are not distinguishable
+     * from the string. MEASURED: a root flush of a shared tag removed a named
+     * namespace's entry too. Putting the namespace in the key makes the
+     * separation structural instead of a guess.
+     *
+     * The `v2` segment says which layout a set belongs to. Sets written under
+     * the old one are simply never read again and expire on their own.
+     */
     public function tagKeyPrefix(): string
     {
         $app = $this->slugify($this->app);
         $env = $this->slugify($this->environment);
         $tenant = $this->tenantKey;
-        return "{$this->prefix}:{$app}:{$env}:{$tenant}:tag:";
+        $ns = $this->namespace !== '' ? ':' . $this->namespace : '';
+        return "{$this->prefix}:{$app}:{$env}:{$tenant}{$ns}:tag:v2:";
     }
 
     private function slugify(string $value): string

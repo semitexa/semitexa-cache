@@ -25,6 +25,15 @@ final class FakeRedisClient implements ClientInterface
     /** @var list<string> every command issued, for asserting on read volume */
     public array $calls = [];
 
+    /** @var array<string, \Closure> command => hook, for acting mid-operation */
+    private array $hooks = [];
+
+    /** Run $hook just before $command executes — how a concurrent writer is staged. */
+    public function onCall(string $command, \Closure $hook): void
+    {
+        $this->hooks[strtolower($command)] = $hook;
+    }
+
     public function getCommandFactory()
     {
         throw new \LogicException('not needed by these tests');
@@ -64,6 +73,10 @@ final class FakeRedisClient implements ClientInterface
     {
         $this->calls[] = strtolower($method);
 
+        if (isset($this->hooks[strtolower($method)])) {
+            ($this->hooks[strtolower($method)])();
+        }
+
         return match (strtolower($method)) {
             'set' => $this->doSet($arguments[0], $arguments[1]),
             'setex' => $this->doSet($arguments[0], $arguments[2]),
@@ -72,10 +85,15 @@ final class FakeRedisClient implements ClientInterface
             'sadd' => $this->doSadd($arguments[0], $arguments[1]),
             'srem' => $this->doSrem($arguments[0], $arguments[1]),
             'smembers' => $this->sets[$arguments[0]] ?? [],
+            'mget' => array_map(fn(string $k) => $this->strings[$k] ?? null, (array) $arguments[0]),
             'expire' => $this->doExpire($arguments[0], (int) $arguments[1]),
             'persist' => $this->doPersist($arguments[0]),
             'ttl' => $this->doTtl($arguments[0]),
             'exists' => isset($this->strings[$arguments[0]]) ? 1 : 0,
+            // Not simulated on purpose: a hand-written stand-in for a Lua
+            // script would test the stand-in. Everything that runs one is
+            // covered against a real Redis instead.
+            'eval' => throw new \LogicException('FakeRedisClient does not run Lua; use the integration test'),
             default => throw new \LogicException("FakeRedisClient does not implement {$method}"),
         };
     }

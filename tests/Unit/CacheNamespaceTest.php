@@ -38,7 +38,35 @@ final class CacheNamespaceTest extends TestCase
     public function testTagKeyPrefix(): void
     {
         $ns = $this->makeNamespace();
-        self::assertSame('semitexa:myapp:prod:tenant:default:tag:', $ns->tagKeyPrefix());
+        self::assertSame('semitexa:myapp:prod:tenant:default:tag:v2:', $ns->tagKeyPrefix());
+    }
+
+    /**
+     * The tag key carries the namespace, so two namespaces of one tenant have
+     * separate tag sets. It did not, and the flush filtered members by
+     * asPrefix() instead — which cannot separate the root namespace from a
+     * named one, because the root's prefix is a string prefix of every named
+     * one and a cache key may contain a colon of its own.
+     */
+    public function testTagKeyPrefixSeparatesNamespaces(): void
+    {
+        self::assertSame(
+            'semitexa:myapp:prod:tenant:default:users:tag:v2:',
+            $this->makeNamespace(namespace: 'users')->tagKeyPrefix(),
+        );
+        self::assertNotSame(
+            $this->makeNamespace()->tagKeyPrefix(),
+            $this->makeNamespace(namespace: 'users')->tagKeyPrefix(),
+        );
+    }
+
+    /** Tenants stay separated too; the namespace is added, nothing is replaced. */
+    public function testTagKeyPrefixStillSeparatesTenants(): void
+    {
+        self::assertNotSame(
+            $this->makeNamespace(tenantKey: 'tenant:a')->tagKeyPrefix(),
+            $this->makeNamespace(tenantKey: 'tenant:b')->tagKeyPrefix(),
+        );
     }
 
     public function testAsPrefixWithGlobalScope(): void
