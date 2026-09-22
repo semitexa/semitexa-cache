@@ -10,7 +10,6 @@ use Semitexa\Cache\Domain\Contract\ExternalTagIndexInterface;
 use Semitexa\Cache\Domain\Contract\TagIndexInterface;
 use Semitexa\Cache\Domain\Enum\CacheScope;
 use Semitexa\Cache\Domain\Model\CacheEntry;
-use Semitexa\Cache\Domain\Model\CacheNamespace;
 use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
 use Semitexa\Cache\Domain\Model\TagSet;
 use Semitexa\Cache\Application\Service\DefaultCacheNamespaceResolver;
