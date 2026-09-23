@@ -5,7 +5,6 @@ namespace Semitexa\Cache\Tests\Unit;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Cache\Domain\Enum\CacheScope;
-use Semitexa\Cache\Domain\Model\CacheNamespace;
 use Semitexa\Cache\Application\Service\DefaultCacheNamespaceResolver;
 use Semitexa\Cache\Application\Service\CacheValueSerializer;
 use Semitexa\Cache\Application\Service\CacheManager;
