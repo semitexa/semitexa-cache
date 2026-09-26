@@ -36,7 +36,7 @@ final class CacheValueSerializer
 
     public function encode(CacheEntry $entry): string
     {
-        if (is_scalar($entry->value) || is_array($entry->value) || $entry->value === null) {
+        if (self::isJsonSafe($entry->value)) {
             $format = 'json';
             $encoded = json_encode($entry->value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             if ($encoded === false) {
@@ -73,6 +73,29 @@ final class CacheValueSerializer
         }
 
         return $envelope;
+    }
+
+    /**
+     * Whether JSON round-trips the value unchanged: scalars, null, and arrays of
+     * those at any depth. An object anywhere inside an array used to take the
+     * JSON path too, where json_encode() flattened it to its public properties
+     * and the read returned a plain array — the class, a DateTimeImmutable or
+     * an enum silently gone. Such values now take the same signed-serialization
+     * (or reject) path as a bare object.
+     */
+    private static function isJsonSafe(mixed $value): bool
+    {
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                if (!self::isJsonSafe($item)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return is_scalar($value) || $value === null;
     }
 
     public function decode(string $raw): CacheEntry
