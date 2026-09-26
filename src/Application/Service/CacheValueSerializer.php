@@ -36,7 +36,7 @@ final class CacheValueSerializer
 
     public function encode(CacheEntry $entry): string
     {
-        if (is_scalar($entry->value) || is_array($entry->value) || $entry->value === null) {
+        if (self::isJsonSafe($entry->value)) {
             $format = 'json';
             $encoded = json_encode($entry->value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             if ($encoded === false) {
@@ -73,6 +73,38 @@ final class CacheValueSerializer
         }
 
         return $envelope;
+    }
+
+    /**
+     * Whether JSON round-trips the value unchanged: scalars, null, and arrays of
+     * those at any depth. An object anywhere inside an array used to take the
+     * JSON path too, where json_encode() flattened it to its public properties
+     * and the read returned a plain array — the class, a DateTimeImmutable or
+     * an enum silently gone. Such values now take the same signed-serialization
+     * (or reject) path as a bare object.
+     *
+     * Nesting deeper than json_encode()'s own default depth (512) cannot round-trip
+     * through JSON either, so it is not JSON-safe. That bound also stops the walk
+     * on an array that holds a reference to itself, which would otherwise recurse
+     * until the stack gives out.
+     */
+    private static function isJsonSafe(mixed $value, int $depth = 0): bool
+    {
+        if (is_array($value)) {
+            if ($depth >= 512) {
+                return false;
+            }
+
+            foreach ($value as $item) {
+                if (!self::isJsonSafe($item, $depth + 1)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return is_scalar($value) || $value === null;
     }
 
     public function decode(string $raw): CacheEntry
