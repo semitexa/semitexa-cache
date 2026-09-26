@@ -82,12 +82,21 @@ final class CacheValueSerializer
      * and the read returned a plain array — the class, a DateTimeImmutable or
      * an enum silently gone. Such values now take the same signed-serialization
      * (or reject) path as a bare object.
+     *
+     * Nesting deeper than json_encode()'s own default depth (512) cannot round-trip
+     * through JSON either, so it is not JSON-safe. That bound also stops the walk
+     * on an array that holds a reference to itself, which would otherwise recurse
+     * until the stack gives out.
      */
-    private static function isJsonSafe(mixed $value): bool
+    private static function isJsonSafe(mixed $value, int $depth = 0): bool
     {
         if (is_array($value)) {
+            if ($depth >= 512) {
+                return false;
+            }
+
             foreach ($value as $item) {
-                if (!self::isJsonSafe($item)) {
+                if (!self::isJsonSafe($item, $depth + 1)) {
                     return false;
                 }
             }

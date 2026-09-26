@@ -22,7 +22,8 @@ final class CacheValueSerializerNestedObjectTest extends TestCase
     {
         $this->expectException(CacheSerializationException::class);
 
-        (new CacheValueSerializer(signingKey: null))->encode($this->entry(['at' => new \DateTimeImmutable('2026-01-01')]));
+        // '' selects the no-key path explicitly; null would read CACHE_SIGNING_KEY.
+        (new CacheValueSerializer(signingKey: ''))->encode($this->entry(['at' => new \DateTimeImmutable('2026-01-01')]));
     }
 
     #[Test]
@@ -33,6 +34,17 @@ final class CacheValueSerializerNestedObjectTest extends TestCase
         $value = $serializer->decode($serializer->encode($this->entry(['nested' => ['at' => new \DateTimeImmutable('2026-01-01')]])))->value;
 
         self::assertInstanceOf(\DateTimeImmutable::class, $value['nested']['at']);
+    }
+
+    #[Test]
+    public function an_array_that_contains_itself_is_rejected_not_walked_forever(): void
+    {
+        $value = ['a' => 1];
+        $value['self'] = &$value;
+
+        $this->expectException(CacheSerializationException::class);
+
+        (new CacheValueSerializer(signingKey: ''))->encode($this->entry($value));
     }
 
     #[Test]
