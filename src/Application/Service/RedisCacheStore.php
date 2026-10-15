@@ -3,13 +3,16 @@ declare(strict_types=1);
 namespace Semitexa\Cache\Application\Service;
 
 use Predis\ClientInterface;
+use Predis\Connection\ConnectionException;
 use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Cache\Domain\Contract\CacheStoreInterface;
 use Semitexa\Cache\Domain\Model\CacheEntry;
 use Semitexa\Cache\Domain\Model\CacheNamespace;
 use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
 use Semitexa\Cache\Application\Service\CacheValueSerializer;
+use Semitexa\Core\Log\StaticLoggerBridge;
 use Semitexa\Core\Redis\RedisConnectionPool;
+use Semitexa\Core\Redis\RedisUnavailableException;
 
 /**
  * Redis-backed cache store.
@@ -62,7 +65,25 @@ final class RedisCacheStore implements CacheStoreInterface
         ]);
     }
 
+    /**
+     * A cache that cannot be reached is a miss, not a failed page: the caller
+     * computes the value as it would on any miss. Same for put(), which then
+     * keeps nothing. forget() and clearNamespace() still throw — an
+     * invalidation that silently did nothing would serve stale data once
+     * Redis is back.
+     */
     public function get(ResolvedCacheKey $key): ?CacheEntry
+    {
+        try {
+            return $this->read($key);
+        } catch (ConnectionException | RedisUnavailableException $e) {
+            self::reportUnreachable($e, 'get');
+
+            return null;
+        }
+    }
+
+    private function read(ResolvedCacheKey $key): ?CacheEntry
     {
         return $this->withConnection(function (ClientInterface $redis) use ($key): ?CacheEntry {
             $raw = $redis->get($key->asString());
@@ -89,13 +110,32 @@ final class RedisCacheStore implements CacheStoreInterface
     public function put(ResolvedCacheKey $key, CacheEntry $entry): void
     {
         $raw = $this->serializer->encode($entry);
-        $this->withConnection(function (ClientInterface $redis) use ($key, $entry, $raw): void {
-            if ($entry->ttlSeconds !== null && $entry->ttlSeconds > 0) {
-                $redis->setex($key->asString(), $entry->ttlSeconds, $raw);
-            } else {
-                $redis->set($key->asString(), $raw);
-            }
-        });
+        try {
+            $this->withConnection(function (ClientInterface $redis) use ($key, $entry, $raw): void {
+                if ($entry->ttlSeconds !== null && $entry->ttlSeconds > 0) {
+                    $redis->setex($key->asString(), $entry->ttlSeconds, $raw);
+                } else {
+                    $redis->set($key->asString(), $raw);
+                }
+            });
+        } catch (ConnectionException | RedisUnavailableException $e) {
+            self::reportUnreachable($e, 'put');
+        }
+    }
+
+    /**
+     * The pool's circuit breaker logs the outage once when it opens; a call it
+     * refused is not news. A first-hand connection error is worth a warning.
+     */
+    private static function reportUnreachable(\Throwable $e, string $operation): void
+    {
+        if ($e instanceof RedisUnavailableException) {
+            return;
+        }
+        StaticLoggerBridge::warning('cache', 'Redis cache unreachable; treated as a miss', [
+            'operation' => $operation,
+            'error' => $e->getMessage(),
+        ]);
     }
 
     public function forget(ResolvedCacheKey $key): bool
