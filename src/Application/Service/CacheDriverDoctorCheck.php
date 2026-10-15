@@ -27,10 +27,13 @@ final class CacheDriverDoctorCheck implements DoctorCheckInterface
     {
         return match ($driver) {
             'array' => DoctorResult::pass('CACHE_DRIVER=array (per-worker, coroutine-safe default).'),
-            'redis' => DoctorResult::warn(
-                'CACHE_DRIVER=redis uses a blocking client that is not coroutine-safe under Swoole '
-                . '(known to kill workers with exit 255).',
-                'Prefer CACHE_DRIVER=array until a coroutine-safe Redis client ships.',
+            // The exit-255 crash was ONE Predis socket shared by coroutines.
+            // The store (2026-06-25) and the tag index (2026-09-12) now borrow
+            // an exclusive connection from a coroutine pool per operation;
+            // RedisTagIndexCoroutineTest is the standing guard. Warning about
+            // a fixed crash taught people to avoid the shared cache.
+            'redis' => DoctorResult::pass(
+                'CACHE_DRIVER=redis (shared across workers; pooled, coroutine-safe connections).',
             ),
             default => DoctorResult::fail(
                 "Invalid CACHE_DRIVER '{$driver}'. Supported (exact, case-sensitive): array, redis.",
