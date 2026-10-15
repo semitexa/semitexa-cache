@@ -30,6 +30,20 @@ final class CacheDriverDoctorCheckTest extends TestCase
     }
 
     #[Test]
+    public function arrayInProductionWarnsThatSharedFeaturesWillRefuse(): void
+    {
+        $check = new CacheDriverDoctorCheck();
+
+        self::assertSame(DoctorStatus::Pass, $check->evaluate('array', 'dev')->status);
+        foreach (['prod', 'production', ' PROD '] as $env) {
+            $result = $check->evaluate('array', $env);
+            self::assertSame(DoctorStatus::Warn, $result->status, $env);
+            self::assertStringContainsString('CACHE_DRIVER=redis', (string) $result->hint);
+        }
+        self::assertSame(DoctorStatus::Pass, $check->evaluate('redis', 'prod')->status);
+    }
+
+    #[Test]
     public function unknownDriverFails(): void
     {
         $result = new CacheDriverDoctorCheck()->evaluate('memcached');
