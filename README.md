@@ -12,7 +12,7 @@ Provides a cache abstraction with pluggable backends, selected by `CACHE_DRIVER`
 
 ## Role in Semitexa
 
-Depends on `semitexa/core`. The default `array` driver is per-worker and coroutine-safe. `CACHE_DRIVER=redis` uses Predis, a blocking client that is not coroutine-safe under Swoole: `system:doctor` warns about it. Becomes tenant-aware when paired with the Tenancy package via `CacheNamespaceResolverInterface`.
+Depends on `semitexa/core`. The default `array` driver is per-worker and coroutine-safe. `CACHE_DRIVER=redis` shares the cache across workers; each operation borrows an exclusive connection from a coroutine pool, so it is safe under Swoole (`RedisTagIndexCoroutineTest` guards it). An unreachable Redis is a cache miss, not an error. Becomes tenant-aware when paired with the Tenancy package via `CacheNamespaceResolverInterface`.
 
 ## Key Features
 

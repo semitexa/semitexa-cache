@@ -20,12 +20,27 @@ final class CacheDriverDoctorCheckTest extends TestCase
     }
 
     #[Test]
-    public function redisDriverWarnsAboutCoroutineSafety(): void
+    public function redisDriverPassesNowThatConnectionsArePooled(): void
     {
         $result = new CacheDriverDoctorCheck()->evaluate('redis');
 
-        self::assertSame(DoctorStatus::Warn, $result->status);
-        self::assertNotNull($result->hint);
+        // verify:accept-test-change the warning described a crash fixed by connection pooling (store 2026-06-25, tag index 2026-09-12; RedisTagIndexCoroutineTest guards it), so redis is a supported driver again
+        self::assertSame(DoctorStatus::Pass, $result->status);
+        self::assertStringContainsString('coroutine-safe', $result->message);
+    }
+
+    #[Test]
+    public function arrayInProductionWarnsThatSharedFeaturesWillRefuse(): void
+    {
+        $check = new CacheDriverDoctorCheck();
+
+        self::assertSame(DoctorStatus::Pass, $check->evaluate('array', 'dev')->status);
+        foreach (['prod', 'production', ' PROD '] as $env) {
+            $result = $check->evaluate('array', $env);
+            self::assertSame(DoctorStatus::Warn, $result->status, $env);
+            self::assertStringContainsString('CACHE_DRIVER=redis', (string) $result->hint);
+        }
+        self::assertSame(DoctorStatus::Pass, $check->evaluate('redis', 'prod')->status);
     }
 
     #[Test]
