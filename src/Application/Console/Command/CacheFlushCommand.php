@@ -3,8 +3,9 @@ declare(strict_types=1);
 namespace Semitexa\Cache\Application\Console\Command;
 
 use Semitexa\Cache\Domain\Enum\CacheScope;
-use Semitexa\Cache\Application\Service\CacheManager;
+use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -13,6 +14,14 @@ use Symfony\Component\Console\Output\OutputInterface;
 #[AsCommand(name: 'cache:flush')]
 final class CacheFlushCommand extends Command
 {
+    /**
+     * The container's manager: one built here with `new` had no tenant store
+     * and no bound resolver, so under tenant:run it acted on the default
+     * tenant's keys and reported success.
+     */
+    #[InjectAsReadonly]
+    protected CacheManagerInterface $cache;
+
     protected function configure(): void
     {
         $this
@@ -50,7 +59,7 @@ final class CacheFlushCommand extends Command
             return Command::FAILURE;
         }
 
-        $manager = new CacheManager();
+        $manager = $this->cache;
         $count = $manager->scope($scope)->flushNamespace($namespace !== '' ? $namespace : null);
 
         $scopeLabel = $scope->value;

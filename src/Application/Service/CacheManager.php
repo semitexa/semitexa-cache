@@ -2,6 +2,7 @@
 declare(strict_types=1);
 namespace Semitexa\Cache\Application\Service;
 
+use Predis\Connection\ConnectionException;
 use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
 use Semitexa\Cache\Domain\Contract\CacheNamespaceResolverInterface;
@@ -23,8 +24,11 @@ use Semitexa\Core\Attribute\Config;
 use Semitexa\Core\Attribute\InjectAsReadonly;
 use Semitexa\Core\Attribute\SatisfiesServiceContract;
 use Semitexa\Core\Environment;
+use Semitexa\Core\Log\StaticLoggerBridge;
 use Semitexa\Core\Redis\RedisConnectionPool;
 use Semitexa\Core\Redis\RedisSharedPool;
+use Semitexa\Core\Redis\RedisUnavailableException;
+use Semitexa\Core\Tenant\TenantContextStoreInterface;
 
 #[SatisfiesServiceContract(of: CacheManagerInterface::class)]
 final class CacheManager implements CacheManagerInterface
@@ -75,6 +79,16 @@ final class CacheManager implements CacheManagerInterface
      */
     #[InjectAsReadonly]
     protected RedisSharedPool $sharedRedis;
+
+    /**
+     * A project's own namespace resolver, when one is bound. The README always
+     * promised this; boot() built the default regardless.
+     */
+    #[InjectAsReadonly(optional: true)]
+    protected CacheNamespaceResolverInterface $boundNamespaceResolver;
+
+    #[InjectAsReadonly(optional: true)]
+    protected TenantContextStoreInterface $tenantContexts;
 
     private ?CacheConfig $config = null;
     private ?CacheStoreInterface $store = null;
@@ -198,10 +212,30 @@ final class CacheManager implements CacheManagerInterface
             // An index that keeps its own keys is told how long the entry
             // lives; one that only implements the published contract is called
             // the way it always was. See ExternalTagIndexInterface.
-            if ($this->tagIndex instanceof ExternalTagIndexInterface) {
-                $this->tagIndex->attachWithLifetime($resolved, $tagSet, $entry->ttlSeconds);
-            } else {
-                $this->tagIndex->attach($resolved, $tagSet);
+            try {
+                if ($this->tagIndex instanceof ExternalTagIndexInterface) {
+                    $this->tagIndex->attachWithLifetime($resolved, $tagSet, $entry->ttlSeconds);
+                } else {
+                    $this->tagIndex->attach($resolved, $tagSet);
+                }
+            } catch (ConnectionException | RedisUnavailableException $e) {
+                // The tag index is away (Redis down): an entry no tag knows
+                // would outlive every flush of its tags, so it goes too. An
+                // outage does not fail the caller's request over a cache write.
+                try {
+                    $this->store->forget($resolved);
+                } catch (ConnectionException | RedisUnavailableException $forgetFailed) {
+                    StaticLoggerBridge::warning('cache', 'A tagged cache entry no tag knows may outlive its tags: neither its tag index nor its removal could be written', [
+                        'error' => $forgetFailed->getMessage(),
+                    ]);
+                }
+                // The breaker already said Redis is unavailable, once; saying
+                // it again for every tagged write would flood the log.
+                if (!$e instanceof RedisUnavailableException) {
+                    StaticLoggerBridge::warning('cache', 'A tagged cache entry was not kept: its tag index could not be written', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
         }
     }
@@ -283,7 +317,9 @@ final class CacheManager implements CacheManagerInterface
         }
 
         if ($this->namespaceResolver === null) {
-            $this->namespaceResolver = new DefaultCacheNamespaceResolver($this->config);
+            $this->namespaceResolver = isset($this->boundNamespaceResolver)
+                ? $this->boundNamespaceResolver
+                : new DefaultCacheNamespaceResolver($this->config, isset($this->tenantContexts) ? $this->tenantContexts : null);
         }
 
         if ($this->store === null) {
