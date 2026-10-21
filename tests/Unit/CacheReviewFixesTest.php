@@ -136,4 +136,46 @@ final class CacheReviewFixesTest extends TestCase
             tagsEnabled: true, redisHost: '127.0.0.1', redisPort: 6379, redisScheme: 'tcp', redisPassword: null,
         );
     }
+
+    #[Test]
+    public function a_default_ttl_of_zero_needs_forever_allowed(): void
+    {
+        // It made every put() without a TTL permanent, past the rule that
+        // refuses an explicit TTL of 0.
+        try {
+            CacheConfig::validate(new CacheConfig(
+                driver: 'array', prefix: 'semitexa', app: 'a', env: 'test', defaultTtl: 0, allowForever: false,
+                tagsEnabled: true, redisHost: '127.0.0.1', redisPort: 6379, redisScheme: 'tcp', redisPassword: null,
+            ));
+            self::fail('accepted');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('CACHE_ALLOW_FOREVER', $e->getMessage());
+        }
+
+        self::assertSame(0, CacheConfig::validate(new CacheConfig(
+            driver: 'array', prefix: 'semitexa', app: 'a', env: 'test', defaultTtl: 0, allowForever: true,
+            tagsEnabled: true, redisHost: '127.0.0.1', redisPort: 6379, redisScheme: 'tcp', redisPassword: null,
+        ))->defaultTtl);
+        self::assertSame('fail', \Semitexa\Cache\Application\Service\CacheTtlDoctorCheck::verdict('0', false)->status->value);
+        self::assertSame('pass', \Semitexa\Cache\Application\Service\CacheTtlDoctorCheck::verdict('0', true)->status->value);
+        self::assertSame('pass', \Semitexa\Cache\Application\Service\CacheTtlDoctorCheck::verdict('300', false)->status->value);
+    }
+
+    #[Test]
+    public function remember_keeps_a_null_it_resolved(): void
+    {
+        // null was also the miss, so a resolver that answered null ran on
+        // every call.
+        $manager = CacheManager::withDependencies(self::config(), new ArrayCacheStore(new CacheValueSerializer()), $this->createStub(TagIndexInterface::class), new DefaultCacheNamespaceResolver(self::config()));
+        $calls = 0;
+        $resolver = static function () use (&$calls): mixed {
+            $calls++;
+            return null;
+        };
+
+        self::assertNull($manager->remember('nobody-home', $resolver));
+        self::assertNull($manager->remember('nobody-home', $resolver));
+        self::assertSame(1, $calls);
+        self::assertSame('fallback', $manager->get('never-stored', 'fallback'));
+    }
 }

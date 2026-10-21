@@ -53,6 +53,13 @@ final readonly class CacheConfig
             throw new \InvalidArgumentException('CACHE_DEFAULT_TTL must be >= 0.');
         }
 
+        // 0 is forever. A put() with TTL 0 is refused without
+        // CACHE_ALLOW_FOREVER, and this default made every put() without a
+        // TTL permanent past that rule.
+        if ($config->defaultTtl === 0 && !$config->allowForever) {
+            throw new \InvalidArgumentException('CACHE_DEFAULT_TTL=0 makes every entry permanent: set CACHE_ALLOW_FOREVER=1 to allow that, or a positive TTL.');
+        }
+
         if ($config->redisPoolSize < 1) {
             throw new \InvalidArgumentException('CACHE_REDIS_POOL_SIZE must be >= 1.');
         }
