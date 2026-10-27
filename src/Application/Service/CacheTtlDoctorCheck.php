@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Semitexa\Cache\Application\Service;
 
+use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Core\Attribute\AsDoctorCheck;
 use Semitexa\Core\Contract\DoctorCheckInterface;
 use Semitexa\Core\Environment;
@@ -15,13 +16,13 @@ final class CacheTtlDoctorCheck implements DoctorCheckInterface
 {
     public function run(): DoctorResult
     {
-        // Read as the server's #[Config] reads them: a TTL that is not an
-        // integer falls back to 300, a boolean takes true/yes/on/1.
-        $ttl = filter_var(Environment::getEnvValue('CACHE_DEFAULT_TTL', '300'), FILTER_VALIDATE_INT);
-
+        // Read by the same code CacheConfig::fromEnvironment() reads them
+        // with, which reads them as the server's #[Config] does: a TTL that
+        // is not a whole number is 300, a flag takes true/yes/on/1. Read
+        // apart, "oops" passed here and was refused there.
         return self::verdict(
-            $ttl === false ? '300' : (string) $ttl,
-            (bool) filter_var(Environment::getEnvValue('CACHE_ALLOW_FOREVER', '0'), FILTER_VALIDATE_BOOLEAN),
+            (string) CacheConfig::defaultTtlFrom(Environment::getEnvValue('CACHE_DEFAULT_TTL')),
+            CacheConfig::flagFrom(Environment::getEnvValue('CACHE_ALLOW_FOREVER'), false),
         );
     }
 

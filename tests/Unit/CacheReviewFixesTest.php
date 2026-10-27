@@ -8,14 +8,18 @@ use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 use Semitexa\Cache\Application\Service\ArrayCacheStore;
 use Semitexa\Cache\Application\Service\CacheManager;
+use Semitexa\Cache\Application\Service\CacheTtlDoctorCheck;
 use Semitexa\Cache\Application\Service\CacheValueSerializer;
 use Semitexa\Cache\Application\Service\DefaultCacheNamespaceResolver;
 use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Cache\Domain\Contract\CacheNamespaceResolverInterface;
+use Semitexa\Cache\Domain\Contract\CacheStoreInterface;
 use Semitexa\Cache\Domain\Contract\ExternalTagIndexInterface;
 use Semitexa\Cache\Domain\Contract\TagIndexInterface;
 use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Domain\Model\CacheEntry;
 use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
 use Semitexa\Core\Redis\RedisUnavailableException;
 use Semitexa\Core\Tenant\DefaultTenantContextStore;
 use Semitexa\Core\Tenant\Layer\TenantLayerInterface;
@@ -49,6 +53,67 @@ final class CacheReviewFixesTest extends TestCase
         $manager->put('report', 'v1', tags: ['reports']);
 
         self::assertNull($manager->get('report'));
+    }
+
+    /**
+     * Stored before its tags, an entry whose tag index and removal both failed
+     * (Redis gone between the calls) stayed readable once Redis was back, and
+     * no flush of its tags could clear it. The tags go first now: such an
+     * entry is never written. The value the key held before goes as well.
+     */
+    #[Test]
+    public function an_entry_whose_tags_cannot_be_written_is_never_stored_even_when_its_removal_fails(): void
+    {
+        $store = new class (new ArrayCacheStore(new CacheValueSerializer())) implements CacheStoreInterface {
+            public bool $forgetFails = true;
+            public function __construct(private readonly ArrayCacheStore $inner) {}
+            public function get(ResolvedCacheKey $key): ?CacheEntry { return $this->inner->get($key); }
+            public function put(ResolvedCacheKey $key, CacheEntry $entry): void { $this->inner->put($key, $entry); }
+            public function forget(ResolvedCacheKey $key): bool
+            {
+                if ($this->forgetFails) {
+                    throw new RedisUnavailableException('redis is away');
+                }
+
+                return $this->inner->forget($key);
+            }
+            public function clearNamespace(CacheNamespace $namespace): int { return $this->inner->clearNamespace($namespace); }
+            public function supportsTags(): bool { return true; }
+        };
+        $down = $this->createStub(TagIndexInterface::class);
+        $down->method('attach')->willThrowException(new RedisUnavailableException('redis is away'));
+        $manager = CacheManager::withDependencies(self::config(), $store, $down, new DefaultCacheNamespaceResolver(self::config()));
+
+        $manager->put('report', 'v1', tags: ['reports']);
+        self::assertNull($manager->get('report'), 'never written, so nothing outlives its tags');
+
+        $store->forgetFails = false;
+        $manager->put('report', 'v0');
+        $manager->put('report', 'v1', tags: ['reports']);
+        self::assertNull($manager->get('report'), 'the older value is not read in place of the lost write');
+    }
+
+    /**
+     * CACHE_DEFAULT_TTL=oops passed `doctor` (read as 300, as the server reads
+     * it) while CacheConfig::fromEnvironment() cast it to 0 and refused it.
+     */
+    #[Test]
+    public function the_doctor_and_the_factory_read_the_ttl_alike(): void
+    {
+        $saved = [getenv('CACHE_DEFAULT_TTL'), getenv('CACHE_ALLOW_FOREVER')];
+        try {
+            putenv('CACHE_ALLOW_FOREVER=0');
+            putenv('CACHE_DEFAULT_TTL=oops');
+            self::assertSame(['pass', 300], [(new CacheTtlDoctorCheck())->run()->status->value, CacheConfig::fromEnvironment()->defaultTtl]);
+            putenv('CACHE_DEFAULT_TTL= 0600 ');
+            self::assertSame(['pass', 600], [(new CacheTtlDoctorCheck())->run()->status->value, CacheConfig::fromEnvironment()->defaultTtl]);
+            putenv('CACHE_DEFAULT_TTL=0');
+            putenv('CACHE_ALLOW_FOREVER=yes');
+            self::assertSame(['pass', 0, true], [(new CacheTtlDoctorCheck())->run()->status->value, CacheConfig::fromEnvironment()->defaultTtl, CacheConfig::fromEnvironment()->allowForever]);
+        } finally {
+            putenv($saved[0] === false ? 'CACHE_DEFAULT_TTL' : 'CACHE_DEFAULT_TTL=' . $saved[0]);
+            putenv($saved[1] === false ? 'CACHE_ALLOW_FOREVER' : 'CACHE_ALLOW_FOREVER=' . $saved[1]);
+        }
     }
 
     #[Test]

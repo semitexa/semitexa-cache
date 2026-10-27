@@ -206,8 +206,12 @@ final class CacheManager implements CacheManagerInterface
             tags: $tagSet,
         );
 
-        $this->store->put($resolved, $entry);
-
+        // The tag index first, then the entry. Stored first, an entry whose
+        // tags could not be written had to be removed again, and with Redis
+        // down that removal failed too: an entry no tag knows, which no flush
+        // of its tags could ever clear (with a TTL of 0, for good). The other
+        // way round, a failure leaves at most a tag naming a key that is not
+        // there, which a flush deletes as nothing.
         if (!$tagSet->isEmpty() && $this->config->tagsEnabled) {
             // An index that keeps its own keys is told how long the entry
             // lives; one that only implements the published contract is called
@@ -219,15 +223,15 @@ final class CacheManager implements CacheManagerInterface
                     $this->tagIndex->attach($resolved, $tagSet);
                 }
             } catch (ConnectionException | RedisUnavailableException $e) {
-                // The tag index is away (Redis down): an entry no tag knows
-                // would outlive every flush of its tags, so it goes too. An
+                // The tag index is away (Redis down): the entry is not
+                // written, and the value the key held before goes, so a
+                // reader does not get it in place of the one written now. An
                 // outage does not fail the caller's request over a cache write.
                 try {
                     $this->store->forget($resolved);
-                } catch (ConnectionException | RedisUnavailableException $forgetFailed) {
-                    StaticLoggerBridge::warning('cache', 'A tagged cache entry no tag knows may outlive its tags: neither its tag index nor its removal could be written', [
-                        'error' => $forgetFailed->getMessage(),
-                    ]);
+                } catch (ConnectionException | RedisUnavailableException) {
+                    // Left in place, the older value is still known to the
+                    // tags it was written with: a flush of them clears it.
                 }
                 // The breaker already said Redis is unavailable, once; saying
                 // it again for every tagged write would flood the log.
@@ -236,8 +240,12 @@ final class CacheManager implements CacheManagerInterface
                         'error' => $e->getMessage(),
                     ]);
                 }
+
+                return;
             }
         }
+
+        $this->store->put($resolved, $entry);
     }
 
     /**
