@@ -2,8 +2,9 @@
 declare(strict_types=1);
 namespace Semitexa\Cache\Application\Console\Command;
 
-use Semitexa\Cache\Application\Service\CacheManager;
+use Semitexa\Cache\Domain\Contract\CacheManagerInterface;
 use Semitexa\Core\Attribute\AsCommand;
+use Semitexa\Core\Attribute\InjectAsReadonly;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -12,6 +13,14 @@ use Symfony\Component\Console\Output\OutputInterface;
 #[AsCommand(name: 'cache:forget')]
 final class CacheForgetCommand extends Command
 {
+    /**
+     * The container's manager: one built here with `new` had no tenant store
+     * and no bound resolver, so under tenant:run it acted on the default
+     * tenant's keys and reported success.
+     */
+    #[InjectAsReadonly]
+    protected CacheManagerInterface $cache;
+
     protected function configure(): void
     {
         $this
@@ -40,7 +49,7 @@ final class CacheForgetCommand extends Command
             return Command::FAILURE;
         }
 
-        $manager = new CacheManager();
+        $manager = $this->cache;
         $scoped = $namespace !== '' ? $manager->withNamespace($namespace) : $manager;
         $scoped->forget($key);
 

@@ -38,8 +38,11 @@ trait SingleFlightRemember
 
     public function remember(string $key, callable $resolver, ?int $ttlSeconds = null, array $tags = []): mixed
     {
-        $existing = $this->get($key);
-        if ($existing !== null) {
+        // A miss is told apart from a stored null by a marker of our own: with
+        // null as the default, a resolver that returned null ran every time.
+        $miss = self::rememberMiss();
+        $existing = $this->get($key, $miss);
+        if ($existing !== $miss) {
             return $existing;
         }
 
@@ -56,11 +59,11 @@ trait SingleFlightRemember
             // Another coroutine is already resolving this key — wait for it,
             // then read the value it cached instead of recomputing.
             $this->inFlightResolutions[$key]->pop();
-            $cached = $this->get($key);
-            if ($cached !== null) {
+            $cached = $this->get($key, $miss);
+            if ($cached !== $miss) {
                 return $cached;
             }
-            // The leader cached nothing (resolver returned null / failed);
+            // The leader cached nothing (its resolver failed);
             // resolve directly this once rather than block again.
             $value = $resolver();
             $this->put($key, $value, $ttlSeconds, $tags);
@@ -84,7 +87,14 @@ trait SingleFlightRemember
         }
     }
 
-    private static function inCoroutineForSingleFlight(): bool
+    private static function rememberMiss(): object
+    {
+        static $miss = null;
+
+        return $miss ??= new \stdClass();
+    }
+
+        private static function inCoroutineForSingleFlight(): bool
     {
         return class_exists(\Swoole\Coroutine::class, false) && \Swoole\Coroutine::getCid() > 0;
     }

@@ -1,0 +1,246 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Semitexa\Cache\Tests\Unit;
+
+use PHPUnit\Framework\Attributes\Test;
+use PHPUnit\Framework\TestCase;
+use Semitexa\Cache\Application\Service\ArrayCacheStore;
+use Semitexa\Cache\Application\Service\CacheManager;
+use Semitexa\Cache\Application\Service\CacheTtlDoctorCheck;
+use Semitexa\Cache\Application\Service\CacheValueSerializer;
+use Semitexa\Cache\Application\Service\DefaultCacheNamespaceResolver;
+use Semitexa\Cache\Configuration\CacheConfig;
+use Semitexa\Cache\Domain\Contract\CacheNamespaceResolverInterface;
+use Semitexa\Cache\Domain\Contract\CacheStoreInterface;
+use Semitexa\Cache\Domain\Contract\ExternalTagIndexInterface;
+use Semitexa\Cache\Domain\Contract\TagIndexInterface;
+use Semitexa\Cache\Domain\Enum\CacheScope;
+use Semitexa\Cache\Domain\Model\CacheEntry;
+use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
+use Semitexa\Core\Redis\RedisUnavailableException;
+use Semitexa\Core\Tenant\DefaultTenantContextStore;
+use Semitexa\Core\Tenant\Layer\TenantLayerInterface;
+use Semitexa\Core\Tenant\Layer\TenantLayerValueInterface;
+use Semitexa\Core\Tenant\TenantContextInterface;
+
+/** Found while writing the cache guide (2026-10-21): each was a promise the code did not keep. */
+final class CacheReviewFixesTest extends TestCase
+{
+    #[Test]
+    public function a_tagged_entry_whose_tag_index_cannot_be_written_is_not_kept_and_the_call_does_not_fail(): void
+    {
+        $store = new ArrayCacheStore(new CacheValueSerializer());
+        $down = $this->createStub(TagIndexInterface::class);
+        $down->method('attach')->willThrowException(new RedisUnavailableException('redis is away'));
+        $manager = CacheManager::withDependencies(self::config(), $store, $down, new DefaultCacheNamespaceResolver(self::config()));
+
+        $manager->put('report', 'v1', tags: ['reports']);
+
+        self::assertNull($manager->get('report'), 'no tag knows it, so no flush could ever clear it');
+    }
+
+    #[Test]
+    public function an_index_that_keeps_its_own_lifetimes_is_handled_the_same_way(): void
+    {
+        $store = new ArrayCacheStore(new CacheValueSerializer());
+        $down = $this->createStub(ExternalTagIndexInterface::class);
+        $down->method('attachWithLifetime')->willThrowException(new RedisUnavailableException('redis is away'));
+        $manager = CacheManager::withDependencies(self::config(), $store, $down, new DefaultCacheNamespaceResolver(self::config()));
+
+        $manager->put('report', 'v1', tags: ['reports']);
+
+        self::assertNull($manager->get('report'));
+    }
+
+    /**
+     * Stored before its tags, an entry whose tag index and removal both failed
+     * (Redis gone between the calls) stayed readable once Redis was back, and
+     * no flush of its tags could clear it. The tags go first now: such an
+     * entry is never written. The value the key held before goes as well.
+     */
+    #[Test]
+    public function an_entry_whose_tags_cannot_be_written_is_never_stored_even_when_its_removal_fails(): void
+    {
+        $store = new class (new ArrayCacheStore(new CacheValueSerializer())) implements CacheStoreInterface {
+            public bool $forgetFails = true;
+            public function __construct(private readonly ArrayCacheStore $inner) {}
+            public function get(ResolvedCacheKey $key): ?CacheEntry { return $this->inner->get($key); }
+            public function put(ResolvedCacheKey $key, CacheEntry $entry): void { $this->inner->put($key, $entry); }
+            public function forget(ResolvedCacheKey $key): bool
+            {
+                if ($this->forgetFails) {
+                    throw new RedisUnavailableException('redis is away');
+                }
+
+                return $this->inner->forget($key);
+            }
+            public function clearNamespace(CacheNamespace $namespace): int { return $this->inner->clearNamespace($namespace); }
+            public function supportsTags(): bool { return true; }
+        };
+        $down = $this->createStub(TagIndexInterface::class);
+        $down->method('attach')->willThrowException(new RedisUnavailableException('redis is away'));
+        $manager = CacheManager::withDependencies(self::config(), $store, $down, new DefaultCacheNamespaceResolver(self::config()));
+
+        $manager->put('report', 'v1', tags: ['reports']);
+        self::assertNull($manager->get('report'), 'never written, so nothing outlives its tags');
+
+        $store->forgetFails = false;
+        $manager->put('report', 'v0');
+        $manager->put('report', 'v1', tags: ['reports']);
+        self::assertNull($manager->get('report'), 'the older value is not read in place of the lost write');
+    }
+
+    /**
+     * CACHE_DEFAULT_TTL=oops passed `doctor` (read as 300, as the server reads
+     * it) while CacheConfig::fromEnvironment() cast it to 0 and refused it.
+     */
+    #[Test]
+    public function the_doctor_and_the_factory_read_the_ttl_alike(): void
+    {
+        $saved = [getenv('CACHE_DEFAULT_TTL'), getenv('CACHE_ALLOW_FOREVER')];
+        try {
+            putenv('CACHE_ALLOW_FOREVER=0');
+            putenv('CACHE_DEFAULT_TTL=oops');
+            self::assertSame(['pass', 300], [(new CacheTtlDoctorCheck())->run()->status->value, CacheConfig::fromEnvironment()->defaultTtl]);
+            putenv('CACHE_DEFAULT_TTL= 0600 ');
+            self::assertSame(['pass', 600], [(new CacheTtlDoctorCheck())->run()->status->value, CacheConfig::fromEnvironment()->defaultTtl]);
+            putenv('CACHE_DEFAULT_TTL=0');
+            putenv('CACHE_ALLOW_FOREVER=yes');
+            self::assertSame(['pass', 0, true], [(new CacheTtlDoctorCheck())->run()->status->value, CacheConfig::fromEnvironment()->defaultTtl, CacheConfig::fromEnvironment()->allowForever]);
+        } finally {
+            putenv($saved[0] === false ? 'CACHE_DEFAULT_TTL' : 'CACHE_DEFAULT_TTL=' . $saved[0]);
+            putenv($saved[1] === false ? 'CACHE_ALLOW_FOREVER' : 'CACHE_ALLOW_FOREVER=' . $saved[1]);
+        }
+    }
+
+    #[Test]
+    public function a_bug_in_a_tag_index_is_not_mistaken_for_an_outage(): void
+    {
+        $broken = $this->createStub(TagIndexInterface::class);
+        $broken->method('attach')->willThrowException(new \LogicException('index bug'));
+        $manager = CacheManager::withDependencies(self::config(), new ArrayCacheStore(new CacheValueSerializer()), $broken, new DefaultCacheNamespaceResolver(self::config()));
+
+        $this->expectException(\LogicException::class);
+        $manager->put('report', 'v1', tags: ['reports']);
+    }
+
+    #[Test]
+    public function the_global_scope_is_not_the_tenant_called_global(): void
+    {
+        $global = (new DefaultCacheNamespaceResolver(self::config()))->resolve('ns', CacheScope::Global);
+
+        self::assertSame('scope:global', $global->tenantKey);
+        self::assertNotSame('tenant:global', $global->tenantKey, 'a tenant whose id is "global" shared the global keys');
+    }
+
+    #[Test]
+    public function the_tenant_comes_from_the_core_tenant_context_store(): void
+    {
+        $store = new DefaultTenantContextStore();
+        $resolver = new DefaultCacheNamespaceResolver(self::config(), $store);
+        self::assertSame('tenant:default', $resolver->resolve('ns')->tenantKey);
+
+        $store->set(self::tenant('global'));
+        try {
+            self::assertSame('tenant:global', $resolver->resolve('ns')->tenantKey);
+            self::assertSame('scope:global', $resolver->resolve('ns', CacheScope::Global)->tenantKey);
+        } finally {
+            $store->clear();
+        }
+    }
+
+    #[Test]
+    public function a_bound_namespace_resolver_is_used(): void
+    {
+        $bound = new class () implements CacheNamespaceResolverInterface {
+            public function resolve(string $namespace, CacheScope $scope = CacheScope::Tenant): CacheNamespace
+            {
+                return new CacheNamespace('semitexa', 'test-app', 'test', $scope, 'tenant:custom', $namespace);
+            }
+        };
+        $manager = new CacheManager();
+        (new \ReflectionProperty(CacheManager::class, 'boundNamespaceResolver'))->setValue($manager, $bound);
+        (new \ReflectionProperty(CacheManager::class, 'config'))->setValue($manager, self::config());
+        (new \ReflectionProperty(CacheManager::class, 'store'))->setValue($manager, new ArrayCacheStore(new CacheValueSerializer()));
+        (new \ReflectionProperty(CacheManager::class, 'tagIndex'))->setValue($manager, $this->createStub(TagIndexInterface::class));
+
+        (new \ReflectionMethod(CacheManager::class, 'boot'))->invoke($manager);
+
+        self::assertSame($bound, (new \ReflectionProperty(CacheManager::class, 'namespaceResolver'))->getValue($manager));
+    }
+
+    private static function tenant(string $id): TenantContextInterface
+    {
+        return new class ($id) implements TenantContextInterface {
+            public function __construct(private readonly string $id) {}
+
+            public function getTenantId(): string
+            {
+                return $this->id;
+            }
+
+            public function getLayer(TenantLayerInterface $layer): ?TenantLayerValueInterface
+            {
+                return null;
+            }
+
+            public function hasLayer(TenantLayerInterface $layer): bool
+            {
+                return false;
+            }
+        };
+    }
+
+    private static function config(): CacheConfig
+    {
+        return new CacheConfig(
+            driver: 'array', prefix: 'semitexa', app: 'test-app', env: 'test', defaultTtl: 300, allowForever: false,
+            tagsEnabled: true, redisHost: '127.0.0.1', redisPort: 6379, redisScheme: 'tcp', redisPassword: null,
+        );
+    }
+
+    #[Test]
+    public function a_default_ttl_of_zero_needs_forever_allowed(): void
+    {
+        // It made every put() without a TTL permanent, past the rule that
+        // refuses an explicit TTL of 0.
+        try {
+            CacheConfig::validate(new CacheConfig(
+                driver: 'array', prefix: 'semitexa', app: 'a', env: 'test', defaultTtl: 0, allowForever: false,
+                tagsEnabled: true, redisHost: '127.0.0.1', redisPort: 6379, redisScheme: 'tcp', redisPassword: null,
+            ));
+            self::fail('accepted');
+        } catch (\InvalidArgumentException $e) {
+            self::assertStringContainsString('CACHE_ALLOW_FOREVER', $e->getMessage());
+        }
+
+        self::assertSame(0, CacheConfig::validate(new CacheConfig(
+            driver: 'array', prefix: 'semitexa', app: 'a', env: 'test', defaultTtl: 0, allowForever: true,
+            tagsEnabled: true, redisHost: '127.0.0.1', redisPort: 6379, redisScheme: 'tcp', redisPassword: null,
+        ))->defaultTtl);
+        self::assertSame('fail', \Semitexa\Cache\Application\Service\CacheTtlDoctorCheck::verdict('0', false)->status->value);
+        self::assertSame('pass', \Semitexa\Cache\Application\Service\CacheTtlDoctorCheck::verdict('0', true)->status->value);
+        self::assertSame('pass', \Semitexa\Cache\Application\Service\CacheTtlDoctorCheck::verdict('300', false)->status->value);
+    }
+
+    #[Test]
+    public function remember_keeps_a_null_it_resolved(): void
+    {
+        // null was also the miss, so a resolver that answered null ran on
+        // every call.
+        $manager = CacheManager::withDependencies(self::config(), new ArrayCacheStore(new CacheValueSerializer()), $this->createStub(TagIndexInterface::class), new DefaultCacheNamespaceResolver(self::config()));
+        $calls = 0;
+        $resolver = static function () use (&$calls): mixed {
+            $calls++;
+            return null;
+        };
+
+        self::assertNull($manager->remember('nobody-home', $resolver));
+        self::assertNull($manager->remember('nobody-home', $resolver));
+        self::assertSame(1, $calls);
+        self::assertSame('fallback', $manager->get('never-stored', 'fallback'));
+    }
+}

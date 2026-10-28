@@ -209,8 +209,8 @@ final class CacheNamespaceTest extends TestCase
 
     public function testAsPrefixWithGlobalScope(): void
     {
-        $ns = $this->makeNamespace(scope: CacheScope::Global, tenantKey: 'tenant:global');
-        self::assertSame('semitexa:myapp:prod:tenant:global:', $ns->asPrefix());
+        $ns = $this->makeNamespace(scope: CacheScope::Global, tenantKey: 'scope:global');
+        self::assertSame('semitexa:myapp:prod:scope:global:', $ns->asPrefix());
     }
 
     public function testAsPrefixSlugifiesAppAndEnv(): void

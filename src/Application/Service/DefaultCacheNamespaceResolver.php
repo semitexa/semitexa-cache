@@ -6,17 +6,22 @@ use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Cache\Domain\Contract\CacheNamespaceResolverInterface;
 use Semitexa\Cache\Domain\Enum\CacheScope;
 use Semitexa\Cache\Domain\Model\CacheNamespace;
+use Semitexa\Core\Tenant\TenantContextAccess;
+use Semitexa\Core\Tenant\TenantContextStoreInterface;
 
 final class DefaultCacheNamespaceResolver implements CacheNamespaceResolverInterface
 {
     public function __construct(
         private readonly CacheConfig $config,
+        private readonly ?TenantContextStoreInterface $tenantContexts = null,
     ) {}
 
     public function resolve(string $namespace, CacheScope $scope = CacheScope::Tenant): CacheNamespace
     {
         $tenantKey = match ($scope) {
-            CacheScope::Global => 'tenant:global',
+            // Not 'tenant:global': a tenant whose id is "global" read and
+            // wrote the global scope's keys.
+            CacheScope::Global => 'scope:global',
             CacheScope::Tenant => $this->resolveTenantKey(),
         };
 
@@ -32,18 +37,8 @@ final class DefaultCacheNamespaceResolver implements CacheNamespaceResolverInter
 
     private function resolveTenantKey(): string
     {
-        $context = null;
-        if (class_exists(\Semitexa\Tenancy\Context\TenantContext::class)) {
-            $context = \Semitexa\Tenancy\Context\TenantContext::get();
-        }
+        $tenantId = TenantContextAccess::tenantId($this->tenantContexts?->tryGet());
 
-        if ($context !== null && method_exists($context, 'getTenantId')) {
-            $tenantId = $context->getTenantId();
-            if ($tenantId !== '' && $tenantId !== 'default') {
-                return 'tenant:' . $tenantId;
-            }
-        }
-
-        return 'tenant:default';
+        return 'tenant:' . ($tenantId ?? 'default');
     }
 }
