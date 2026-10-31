@@ -19,8 +19,10 @@ use Semitexa\Cache\Tests\Support\RequiresRedis;
  * borrowed from a pool for that reason; the tag index used to hold one shared
  * client, so any concurrent tagged put or flush hit the trap.
  *
- * This test is the standing guard. It needs a real Redis and a real Swoole,
- * and skips where either is missing rather than pretending to have run.
+ * This test is the standing guard. It needs a real Redis and a real Swoole:
+ * it skips when no Redis is configured, fails when a configured one does not
+ * answer, and takes Swoole as given (core requires ext-swoole, and the suite
+ * runs in the app image).
  *
  * Manual harness with both wirings side by side: var/docs/cache-tag-socket-repro.php
  */
@@ -60,6 +62,7 @@ final class RedisTagIndexCoroutineTest extends TestCase
                 'scheme' => $config->redisScheme,
                 'host' => $config->redisHost,
                 'port' => $config->redisPort,
+                'read_write_timeout' => 5,
             ]);
 
             $manager = CacheManager::withDependencies(

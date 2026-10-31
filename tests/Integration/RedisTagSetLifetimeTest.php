@@ -36,7 +36,7 @@ final class RedisTagSetLifetimeTest extends TestCase
         $host = self::redisHost();
 
         $this->prefix = 'semitexa-lifetime-' . bin2hex(random_bytes(4));
-        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379]);
+        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379, 'read_write_timeout' => 5]);
     }
 
     protected function tearDown(): void

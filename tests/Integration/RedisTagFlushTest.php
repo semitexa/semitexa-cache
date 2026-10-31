@@ -39,7 +39,7 @@ final class RedisTagFlushTest extends TestCase
         $host = self::redisHost();
 
         $this->prefix = 'semitexa-flush-' . bin2hex(random_bytes(4));
-        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379]);
+        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379, 'read_write_timeout' => 5]);
         $this->serializer = new CacheValueSerializer();
         $this->config = new CacheConfig(
             driver: 'redis',
