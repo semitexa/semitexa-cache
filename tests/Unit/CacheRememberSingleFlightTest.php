@@ -24,13 +24,6 @@ use Swoole\Coroutine\WaitGroup;
  */
 final class CacheRememberSingleFlightTest extends TestCase
 {
-    protected function setUp(): void
-    {
-        if (!class_exists(Coroutine::class)) {
-            self::markTestSkipped('Swoole extension is required.');
-        }
-    }
-
     #[Test]
     public function concurrent_misses_of_the_same_key_run_the_resolver_once(): void
     {

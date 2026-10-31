@@ -10,6 +10,7 @@ use Semitexa\Cache\Application\Service\DefaultCacheNamespaceResolver;
 use Semitexa\Cache\Application\Service\RedisCacheStore;
 use Semitexa\Cache\Application\Service\RedisTagIndex;
 use Semitexa\Cache\Configuration\CacheConfig;
+use Semitexa\Cache\Tests\Support\RequiresRedis;
 
 /**
  * A tag set must not outlive everything it names, and must not die before any
@@ -25,18 +26,17 @@ use Semitexa\Cache\Configuration\CacheConfig;
  */
 final class RedisTagSetLifetimeTest extends TestCase
 {
+    use RequiresRedis;
+
     private \Predis\Client $redis;
     private string $prefix;
 
     protected function setUp(): void
     {
-        $host = self::reachableHost();
-        if ($host === null) {
-            self::markTestSkipped('needs a reachable Redis on port 6379');
-        }
+        $host = self::redisHost();
 
         $this->prefix = 'semitexa-lifetime-' . bin2hex(random_bytes(4));
-        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379]);
+        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379, 'read_write_timeout' => 5]);
     }
 
     protected function tearDown(): void
@@ -49,21 +49,6 @@ final class RedisTagSetLifetimeTest extends TestCase
         }
     }
 
-    private static function reachableHost(): ?string
-    {
-        foreach ([getenv('REDIS_HOST') ?: null, 'redis', '127.0.0.1'] as $host) {
-            if ($host === null) {
-                continue;
-            }
-            $socket = @fsockopen($host, 6379, $errno, $errstr, 0.5);
-            if ($socket !== false) {
-                fclose($socket);
-                return $host;
-            }
-        }
-
-        return null;
-    }
 
     private function makeManager(bool $allowForever = false): CacheManager
     {

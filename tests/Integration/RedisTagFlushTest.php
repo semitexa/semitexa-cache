@@ -12,6 +12,7 @@ use Semitexa\Cache\Domain\Model\CacheEntry;
 use Semitexa\Cache\Domain\Model\CacheNamespace;
 use Semitexa\Cache\Domain\Model\ResolvedCacheKey;
 use Semitexa\Cache\Domain\Model\TagSet;
+use Semitexa\Cache\Tests\Support\RequiresRedis;
 
 /**
  * What flush() decides to delete, prune, or leave alone.
@@ -26,6 +27,8 @@ use Semitexa\Cache\Domain\Model\TagSet;
  */
 final class RedisTagFlushTest extends TestCase
 {
+    use RequiresRedis;
+
     private \Predis\Client $redis;
     private CacheValueSerializer $serializer;
     private CacheConfig $config;
@@ -33,13 +36,10 @@ final class RedisTagFlushTest extends TestCase
 
     protected function setUp(): void
     {
-        $host = self::reachableHost();
-        if ($host === null) {
-            self::markTestSkipped('needs a reachable Redis on port 6379');
-        }
+        $host = self::redisHost();
 
         $this->prefix = 'semitexa-flush-' . bin2hex(random_bytes(4));
-        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379]);
+        $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379, 'read_write_timeout' => 5]);
         $this->serializer = new CacheValueSerializer();
         $this->config = new CacheConfig(
             driver: 'redis',
@@ -66,21 +66,6 @@ final class RedisTagFlushTest extends TestCase
         }
     }
 
-    private static function reachableHost(): ?string
-    {
-        foreach ([getenv('REDIS_HOST') ?: null, 'redis', '127.0.0.1'] as $host) {
-            if ($host === null) {
-                continue;
-            }
-            $socket = @fsockopen($host, 6379, $errno, $errstr, 0.5);
-            if ($socket !== false) {
-                fclose($socket);
-                return $host;
-            }
-        }
-
-        return null;
-    }
 
     private function namespaceFor(string $name = ''): CacheNamespace
     {

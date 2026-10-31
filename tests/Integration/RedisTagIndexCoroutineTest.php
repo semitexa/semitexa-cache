@@ -10,6 +10,7 @@ use Semitexa\Cache\Application\Service\RedisCacheStore;
 use Semitexa\Cache\Application\Service\RedisTagIndex;
 use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Core\Redis\RedisConnectionPool;
+use Semitexa\Cache\Tests\Support\RequiresRedis;
 
 /**
  * A Predis socket is coroutine-exclusive once Swoole hooks the runtime: two
@@ -18,39 +19,23 @@ use Semitexa\Core\Redis\RedisConnectionPool;
  * borrowed from a pool for that reason; the tag index used to hold one shared
  * client, so any concurrent tagged put or flush hit the trap.
  *
- * This test is the standing guard. It needs a real Redis and a real Swoole,
- * and skips where either is missing rather than pretending to have run.
+ * This test is the standing guard. It needs a real Redis and a real Swoole:
+ * it skips when no Redis is configured, fails when a configured one does not
+ * answer, and takes Swoole as given (core requires ext-swoole, and the suite
+ * runs in the app image).
  *
  * Manual harness with both wirings side by side: var/docs/cache-tag-socket-repro.php
  */
 final class RedisTagIndexCoroutineTest extends TestCase
 {
+    use RequiresRedis;
+
     private const CONCURRENCY = 16;
 
-    private static function redisHost(): ?string
-    {
-        foreach ([getenv('REDIS_HOST') ?: null, 'redis', '127.0.0.1'] as $host) {
-            if ($host === null) {
-                continue;
-            }
-            $socket = @fsockopen($host, 6379, $errno, $errstr, 0.5);
-            if ($socket !== false) {
-                fclose($socket);
-                return $host;
-            }
-        }
-        return null;
-    }
 
     public function testConcurrentTaggedWritesDoNotShareASocket(): void
     {
-        if (!extension_loaded('swoole')) {
-            self::markTestSkipped('needs the swoole extension: the failure only exists in a hooked runtime');
-        }
         $host = self::redisHost();
-        if ($host === null) {
-            self::markTestSkipped('needs a reachable Redis on port 6379');
-        }
 
         $config = new CacheConfig(
             driver: 'redis',
@@ -77,6 +62,7 @@ final class RedisTagIndexCoroutineTest extends TestCase
                 'scheme' => $config->redisScheme,
                 'host' => $config->redisHost,
                 'port' => $config->redisPort,
+                'read_write_timeout' => 5,
             ]);
 
             $manager = CacheManager::withDependencies(
