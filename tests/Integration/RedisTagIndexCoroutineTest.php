@@ -10,6 +10,7 @@ use Semitexa\Cache\Application\Service\RedisCacheStore;
 use Semitexa\Cache\Application\Service\RedisTagIndex;
 use Semitexa\Cache\Configuration\CacheConfig;
 use Semitexa\Core\Redis\RedisConnectionPool;
+use Semitexa\Cache\Tests\Support\RequiresRedis;
 
 /**
  * A Predis socket is coroutine-exclusive once Swoole hooks the runtime: two
@@ -25,32 +26,14 @@ use Semitexa\Core\Redis\RedisConnectionPool;
  */
 final class RedisTagIndexCoroutineTest extends TestCase
 {
+    use RequiresRedis;
+
     private const CONCURRENCY = 16;
 
-    private static function redisHost(): ?string
-    {
-        foreach ([getenv('REDIS_HOST') ?: null, 'redis', '127.0.0.1'] as $host) {
-            if ($host === null) {
-                continue;
-            }
-            $socket = @fsockopen($host, 6379, $errno, $errstr, 0.5);
-            if ($socket !== false) {
-                fclose($socket);
-                return $host;
-            }
-        }
-        return null;
-    }
 
     public function testConcurrentTaggedWritesDoNotShareASocket(): void
     {
-        if (!extension_loaded('swoole')) {
-            self::markTestSkipped('needs the swoole extension: the failure only exists in a hooked runtime');
-        }
         $host = self::redisHost();
-        if ($host === null) {
-            self::markTestSkipped('needs a reachable Redis on port 6379');
-        }
 
         $config = new CacheConfig(
             driver: 'redis',

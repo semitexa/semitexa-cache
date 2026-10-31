@@ -10,6 +10,7 @@ use Semitexa\Cache\Application\Service\DefaultCacheNamespaceResolver;
 use Semitexa\Cache\Application\Service\RedisCacheStore;
 use Semitexa\Cache\Application\Service\RedisTagIndex;
 use Semitexa\Cache\Configuration\CacheConfig;
+use Semitexa\Cache\Tests\Support\RequiresRedis;
 
 /**
  * Tag sets were moved out of the entry keyspace so that the root namespace's
@@ -24,15 +25,14 @@ use Semitexa\Cache\Configuration\CacheConfig;
  */
 final class RedisNamespaceFlushClearsTagsTest extends TestCase
 {
+    use RequiresRedis;
+
     private \Predis\Client $redis;
     private string $prefix;
 
     protected function setUp(): void
     {
-        $host = self::reachableHost();
-        if ($host === null) {
-            self::markTestSkipped('needs a reachable Redis on port 6379');
-        }
+        $host = self::redisHost();
 
         $this->prefix = 'semitexa-nsflush-' . bin2hex(random_bytes(4));
         $this->redis = new \Predis\Client(['host' => $host, 'port' => 6379]);
@@ -48,21 +48,6 @@ final class RedisNamespaceFlushClearsTagsTest extends TestCase
         }
     }
 
-    private static function reachableHost(): ?string
-    {
-        foreach ([getenv('REDIS_HOST') ?: null, 'redis', '127.0.0.1'] as $host) {
-            if ($host === null) {
-                continue;
-            }
-            $socket = @fsockopen($host, 6379, $errno, $errstr, 0.5);
-            if ($socket !== false) {
-                fclose($socket);
-                return $host;
-            }
-        }
-
-        return null;
-    }
 
     private function makeManager(): CacheManager
     {
