@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Semitexa\Cache\Tests\Support;
 
+use Semitexa\Core\Environment;
+
 /**
  * The real Redis these integration tests are about.
  *
@@ -16,8 +18,10 @@ trait RequiresRedis
 {
     private static function redisHost(): string
     {
-        $host = getenv('REDIS_HOST');
-        if ($host === false || $host === '') {
+        // Read as the application reads it: a REDIS_HOST only in .env is
+        // configured, not unset.
+        $host = Environment::getEnvValue('REDIS_HOST');
+        if ($host === null || $host === '') {
             self::markTestSkipped('REDIS_HOST not configured — the test requires real Redis');
         }
         $socket = @fsockopen($host, 6379, $errno, $errstr, 0.5);
