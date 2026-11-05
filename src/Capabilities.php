@@ -39,14 +39,25 @@ use Semitexa\Core\Attribute\Capability;
                 return $this->cache->remember('featured-products', fn (): array => $this->load(),
                     ttlSeconds: 600, tags: ['products']);
             }
+
+            // Call this when a product changes.
+            public function productChanged(): void
+            {
+                $this->cache->flushTags('products');
+            }
+
+            private function load(): array
+            {
+                return ['...'];
+            }
         }
 
-        // When a product changes:
-        $this->cache->flushTags('products');
-
-        // Every key is already separate per tenant: never put the tenant in the key.
-        // Store scalars and arrays of them. An object needs CACHE_SIGNING_KEY.
-        // CACHE_DRIVER=array is per worker, so a flush reaches one worker; use redis across workers.
+        // Keys are separate per tenant of the current context. With no tenant in context, as in a
+        // job that did not get one, every caller shares tenant:default, so put the tenant in the
+        // key there or give the job its tenant.
+        // A flush during a running load can be overwritten by that load until the TTL ends.
+        // Store scalars and arrays of them, in valid UTF-8: base64_encode() binary data. An object
+        // needs CACHE_SIGNING_KEY. CACHE_DRIVER=array is per worker; use redis across workers.
         USAGE,
 )]
 final class Capabilities
