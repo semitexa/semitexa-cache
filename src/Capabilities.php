@@ -26,6 +26,28 @@ use Semitexa\Core\Attribute\Capability;
         'a static array that survives one request and leaks between coroutines',
         'cache keys assembled by string concatenation, with the tenant forgotten in one place',
     ],
+    usage: <<<'USAGE'
+        #[AsService]
+        final class ProductCatalog
+        {
+            #[InjectAsReadonly]
+            protected CacheManagerInterface $cache;
+
+            public function featured(): array
+            {
+                // The closure runs only on a miss.
+                return $this->cache->remember('featured-products', fn (): array => $this->load(),
+                    ttlSeconds: 600, tags: ['products']);
+            }
+        }
+
+        // When a product changes:
+        $this->cache->flushTags('products');
+
+        // Every key is already separate per tenant: never put the tenant in the key.
+        // Store scalars and arrays of them. An object needs CACHE_SIGNING_KEY.
+        // CACHE_DRIVER=array is per worker, so a flush reaches one worker; use redis across workers.
+        USAGE,
 )]
 final class Capabilities
 {
