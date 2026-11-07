@@ -44,6 +44,29 @@ final class CacheDriverDoctorCheckTest extends TestCase
     }
 
     #[Test]
+    public function arrayWithSeveralWorkersWarnsWhateverTheEnvironment(): void
+    {
+        // A fresh project: APP_ENV=dev and four workers, and a third of its forms refused.
+        $result = new CacheDriverDoctorCheck()->evaluate('array', 'dev', 4);
+
+        self::assertSame(DoctorStatus::Warn, $result->status);
+        self::assertStringContainsString('4 workers', $result->message);
+        self::assertStringContainsString('form tokens', $result->message);
+    }
+
+    #[Test]
+    public function arrayWithOneWorkerInDevPasses(): void
+    {
+        self::assertSame(DoctorStatus::Pass, new CacheDriverDoctorCheck()->evaluate('array', 'dev', 1)->status);
+    }
+
+    #[Test]
+    public function redisWithSeveralWorkersPasses(): void
+    {
+        self::assertSame(DoctorStatus::Pass, new CacheDriverDoctorCheck()->evaluate('redis', 'dev', 4)->status);
+    }
+
+    #[Test]
     public function unknownDriverFails(): void
     {
         $result = new CacheDriverDoctorCheck()->evaluate('memcached');
