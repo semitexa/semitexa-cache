@@ -44,6 +44,55 @@ final class CacheDriverDoctorCheckTest extends TestCase
     }
 
     #[Test]
+    public function arrayWithSeveralWorkersWarnsWhateverTheEnvironment(): void
+    {
+        // A fresh project: APP_ENV=dev and four workers, and a third of its forms refused.
+        $result = new CacheDriverDoctorCheck()->evaluate('array', 'dev', 4);
+
+        self::assertSame(DoctorStatus::Warn, $result->status);
+        self::assertStringContainsString('4 workers', $result->message);
+        self::assertStringContainsString('form tokens', $result->message);
+    }
+
+    #[Test]
+    public function twoWorkersAreAlreadySeveral(): void
+    {
+        self::assertSame(DoctorStatus::Warn, new CacheDriverDoctorCheck()->evaluate('array', 'dev', 2)->status);
+    }
+
+    #[Test]
+    public function runReadsTheWorkerCount(): void
+    {
+        // Its fallbacks (prod, four workers) warn on their own: one worker in dev must pass to prove the read.
+        $saved = [];
+        foreach (['CACHE_DRIVER' => 'array', 'APP_ENV' => 'dev', 'SWOOLE_WORKER_NUM' => '1'] as $key => $value) {
+            $saved[$key] = getenv($key);
+            putenv("{$key}={$value}");
+        }
+        try {
+            self::assertSame(DoctorStatus::Pass, new CacheDriverDoctorCheck()->run()->status);
+            putenv('SWOOLE_WORKER_NUM=4');
+            self::assertSame(DoctorStatus::Warn, new CacheDriverDoctorCheck()->run()->status);
+        } finally {
+            foreach ($saved as $key => $value) {
+                putenv($value === false ? $key : "{$key}={$value}");
+            }
+        }
+    }
+
+    #[Test]
+    public function arrayWithOneWorkerInDevPasses(): void
+    {
+        self::assertSame(DoctorStatus::Pass, new CacheDriverDoctorCheck()->evaluate('array', 'dev', 1)->status);
+    }
+
+    #[Test]
+    public function redisWithSeveralWorkersPasses(): void
+    {
+        self::assertSame(DoctorStatus::Pass, new CacheDriverDoctorCheck()->evaluate('redis', 'dev', 4)->status);
+    }
+
+    #[Test]
     public function unknownDriverFails(): void
     {
         $result = new CacheDriverDoctorCheck()->evaluate('memcached');

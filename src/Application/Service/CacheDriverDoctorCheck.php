@@ -17,6 +17,7 @@ final class CacheDriverDoctorCheck implements DoctorCheckInterface
         return $this->evaluate(
             (string) (Environment::getEnvValue('CACHE_DRIVER', 'array') ?? 'array'),
             (string) (Environment::getEnvValue('APP_ENV', 'prod') ?? 'prod'),
+            (int) (Environment::getEnvValue('SWOOLE_WORKER_NUM', '4') ?? '4'),
         );
     }
 
@@ -26,19 +27,22 @@ final class CacheDriverDoctorCheck implements DoctorCheckInterface
      * boot — the doctor verdict must mirror the runtime, not be more
      * forgiving than it.
      */
-    public function evaluate(string $driver, string $appEnv = 'dev'): DoctorResult
+    public function evaluate(string $driver, string $appEnv = 'dev', int $workers = 1): DoctorResult
     {
         $production = in_array(strtolower(trim($appEnv)), ['prod', 'production'], true);
 
         return match ($driver) {
-            // Per-worker is fine for one developer. In production, everything
-            // that must agree across workers refuses to run on it — platform-ui
-            // answers its UI events 503 'ui_replay_store_not_shared' — and that
-            // was live on platform.semitexa.com's shared form (2026-10-16).
-            'array' => $production
+            // Per-worker is fine for one worker. With several, everything that
+            // must agree across them breaks, whatever APP_ENV says: platform-ui
+            // answers its UI events 503 'ui_replay_store_not_shared' (live on
+            // platform.semitexa.com's shared form, 2026-10-16), and a form's
+            // one-time token is unknown to the worker that takes the submit: 7 of
+            // 20 visitors refused on a fresh project with APP_ENV=dev, while this
+            // check passed (2026-11-07).
+            'array' => $production || $workers > 1
                 ? DoctorResult::warn(
-                    'CACHE_DRIVER=array in production: each worker has its own cache, so features that must agree '
-                    . 'across workers (UI event replay protection, collaborative presence) refuse to run.',
+                    sprintf('CACHE_DRIVER=array with %s: each worker has its own cache, so features that must agree '
+                    . 'across workers (form tokens, UI event replay protection, collaborative presence) fail or refuse to run.', $workers > 1 ? "{$workers} workers" : 'production'),
                     'Set CACHE_DRIVER=redis (with REDIS_HOST) and recreate the containers.',
                 )
                 : DoctorResult::pass('CACHE_DRIVER=array (per-worker, coroutine-safe default).'),
