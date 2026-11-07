@@ -55,6 +55,29 @@ final class CacheDriverDoctorCheckTest extends TestCase
     }
 
     #[Test]
+    public function twoWorkersAreAlreadySeveral(): void
+    {
+        self::assertSame(DoctorStatus::Warn, new CacheDriverDoctorCheck()->evaluate('array', 'dev', 2)->status);
+    }
+
+    #[Test]
+    public function runReadsTheWorkerCount(): void
+    {
+        $saved = [];
+        foreach (['CACHE_DRIVER' => 'array', 'APP_ENV' => 'dev', 'SWOOLE_WORKER_NUM' => '4'] as $key => $value) {
+            $saved[$key] = getenv($key);
+            putenv("{$key}={$value}");
+        }
+        try {
+            self::assertSame(DoctorStatus::Warn, new CacheDriverDoctorCheck()->run()->status);
+        } finally {
+            foreach ($saved as $key => $value) {
+                putenv($value === false ? $key : "{$key}={$value}");
+            }
+        }
+    }
+
+    #[Test]
     public function arrayWithOneWorkerInDevPasses(): void
     {
         self::assertSame(DoctorStatus::Pass, new CacheDriverDoctorCheck()->evaluate('array', 'dev', 1)->status);
