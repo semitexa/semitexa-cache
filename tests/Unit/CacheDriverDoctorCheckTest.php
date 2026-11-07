@@ -63,12 +63,15 @@ final class CacheDriverDoctorCheckTest extends TestCase
     #[Test]
     public function runReadsTheWorkerCount(): void
     {
+        // Its fallbacks (prod, four workers) warn on their own: one worker in dev must pass to prove the read.
         $saved = [];
-        foreach (['CACHE_DRIVER' => 'array', 'APP_ENV' => 'dev', 'SWOOLE_WORKER_NUM' => '4'] as $key => $value) {
+        foreach (['CACHE_DRIVER' => 'array', 'APP_ENV' => 'dev', 'SWOOLE_WORKER_NUM' => '1'] as $key => $value) {
             $saved[$key] = getenv($key);
             putenv("{$key}={$value}");
         }
         try {
+            self::assertSame(DoctorStatus::Pass, new CacheDriverDoctorCheck()->run()->status);
+            putenv('SWOOLE_WORKER_NUM=4');
             self::assertSame(DoctorStatus::Warn, new CacheDriverDoctorCheck()->run()->status);
         } finally {
             foreach ($saved as $key => $value) {
