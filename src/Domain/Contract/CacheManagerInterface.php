@@ -17,9 +17,8 @@ interface CacheManagerInterface
      * value, on every store (Redis DEL counts what it deleted): a one-time token is
      * spent once, by whichever worker took it.
      *
-     * For a key written once, as a token. It is a read and a delete, not GETDEL: a key
-     * rewritten between them hands the winner the value it read, and the new one is
-     * removed with it. A Redis failure on the delete throws, as forget() does.
+     * The store makes the read and the removal one step (a script on Redis), so a value
+     * written after the take survives it. An unreachable Redis is a miss: null.
      */
     public function take(string $key): mixed;
     public function flushTags(string ...$tags): int;

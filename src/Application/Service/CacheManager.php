@@ -279,20 +279,25 @@ final class CacheManager implements CacheManagerInterface
     }
 
     /**
-     * Internal: take with explicit context (used by ScopedCacheManager). The value is the
-     * caller's only when its own forget removed the entry: another caller that read the
-     * same entry and removed it first gets it instead, and this one gets null.
+     * Internal: take with explicit context (used by ScopedCacheManager). The store reads
+     * and removes in one step, so of callers taking one key at once one gets the value.
      */
     public function doTake(string $namespace, CacheScope $scope, string $key): mixed
     {
         $this->boot();
         $resolved = $this->resolveKey($key, $namespace, $scope);
-        $entry = $this->store->get($resolved);
-        if ($entry === null || !$this->store->forget($resolved)) {
+        $entry = $this->store->take($resolved);
+        if ($entry === null) {
             return null;
         }
         if (!$entry->tags->isEmpty() && $this->config->tagsEnabled) {
-            $this->tagIndex->detach($resolved, $entry->tags);
+            // The entry is gone and the value is this caller's: a stale tag link costs a
+            // no-op flush later, while throwing here would lose a value no retry can take.
+            try {
+                $this->tagIndex->detach($resolved, $entry->tags);
+            } catch (\Throwable $e) {
+                \Semitexa\Core\Log\StaticLoggerBridge::warning('cache', 'take(): the entry is gone, its tag links stay', ['error' => $e->getMessage()]);
+            }
         }
 
         return $entry->value;

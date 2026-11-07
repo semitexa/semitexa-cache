@@ -69,6 +69,7 @@ final class CacheReviewFixesTest extends TestCase
             public function __construct(private readonly ArrayCacheStore $inner) {}
             public function get(ResolvedCacheKey $key): ?CacheEntry { return $this->inner->get($key); }
             public function put(ResolvedCacheKey $key, CacheEntry $entry): void { $this->inner->put($key, $entry); }
+            public function take(ResolvedCacheKey $key): ?CacheEntry { return $this->inner->take($key); }
             public function forget(ResolvedCacheKey $key): bool
             {
                 if ($this->forgetFails) {
