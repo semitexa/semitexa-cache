@@ -138,6 +138,34 @@ final class RedisCacheStore implements CacheStoreInterface
         ]);
     }
 
+    /** GET and DEL in one script: Redis runs it whole, so nothing lands between them. GETDEL needs 6.2. */
+    private const TAKE = "local v = redis.call('GET', KEYS[1]) if v then redis.call('DEL', KEYS[1]) end return v";
+
+    /**
+     * Unreachable is a miss, as for get(): a one-time token that cannot be taken is
+     * not consumed, and the form is refused rather than run twice.
+     */
+    public function take(ResolvedCacheKey $key): ?CacheEntry
+    {
+        try {
+            $raw = $this->withConnection(static fn (ClientInterface $redis): mixed => $redis->eval(self::TAKE, 1, $key->asString()));
+        } catch (ConnectionException | RedisUnavailableException $e) {
+            self::reportUnreachable($e, 'take');
+
+            return null;
+        }
+        if (!is_string($raw) || $raw === '') {
+            return null;
+        }
+        try {
+            $entry = $this->serializer->decode($raw);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return $entry->isExpiredAt(time()) ? null : $entry;
+    }
+
     public function forget(ResolvedCacheKey $key): bool
     {
         return $this->withConnection(static function (ClientInterface $redis) use ($key): bool {

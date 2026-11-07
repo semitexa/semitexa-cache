@@ -131,6 +131,11 @@ final class CacheManager implements CacheManagerInterface
         $this->doForget(namespace: '', scope: CacheScope::Tenant, key: $key);
     }
 
+    public function take(string $key): mixed
+    {
+        return $this->doTake(namespace: '', scope: CacheScope::Tenant, key: $key);
+    }
+
     public function flushTags(string ...$tags): int
     {
         $this->boot();
@@ -271,6 +276,31 @@ final class CacheManager implements CacheManagerInterface
             $this->tagIndex->detach($resolved, $entry->tags);
         }
         $this->store->forget($resolved);
+    }
+
+    /**
+     * Internal: take with explicit context (used by ScopedCacheManager). The store reads
+     * and removes in one step, so of callers taking one key at once one gets the value.
+     */
+    public function doTake(string $namespace, CacheScope $scope, string $key): mixed
+    {
+        $this->boot();
+        $resolved = $this->resolveKey($key, $namespace, $scope);
+        $entry = $this->store->take($resolved);
+        if ($entry === null) {
+            return null;
+        }
+        if (!$entry->tags->isEmpty() && $this->config->tagsEnabled) {
+            // The entry is gone and the value is this caller's: a stale tag link costs a
+            // no-op flush later, while throwing here would lose a value no retry can take.
+            try {
+                $this->tagIndex->detach($resolved, $entry->tags);
+            } catch (\Throwable $e) {
+                \Semitexa\Core\Log\StaticLoggerBridge::warning('cache', 'take(): the entry is gone, its tag links stay', ['error' => $e->getMessage()]);
+            }
+        }
+
+        return $entry->value;
     }
 
     /**

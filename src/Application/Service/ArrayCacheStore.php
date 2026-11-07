@@ -27,6 +27,14 @@ final class ArrayCacheStore implements CacheStoreInterface
         $this->store[$key->asString()] = $this->serializer->encode($entry);
     }
 
+    public function take(ResolvedCacheKey $key): ?CacheEntry
+    {
+        $entry = $this->get($key);
+        unset($this->store[$key->asString()]);
+
+        return $entry;
+    }
+
     public function forget(ResolvedCacheKey $key): bool
     {
         if (!isset($this->store[$key->asString()])) {
