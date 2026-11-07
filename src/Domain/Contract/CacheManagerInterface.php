@@ -12,10 +12,14 @@ interface CacheManagerInterface
     public function forget(string $key): void;
 
     /**
-     * The value under $key, removed in the same step: null when there was none, or
-     * when another caller removed it first. Of two callers taking one key at once,
-     * exactly one gets the value, on every store (Redis DEL counts what it deleted):
-     * a one-time token is spent once, by whichever worker took it.
+     * The value under $key, removed: null when there was none, or when another caller
+     * removed it first. Of two callers taking one key at once, exactly one gets the
+     * value, on every store (Redis DEL counts what it deleted): a one-time token is
+     * spent once, by whichever worker took it.
+     *
+     * For a key written once, as a token. It is a read and a delete, not GETDEL: a key
+     * rewritten between them hands the winner the value it read, and the new one is
+     * removed with it. A Redis failure on the delete throws, as forget() does.
      */
     public function take(string $key): mixed;
     public function flushTags(string ...$tags): int;
