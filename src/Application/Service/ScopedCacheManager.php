@@ -46,6 +46,11 @@ final class ScopedCacheManager implements CacheManagerInterface
         $this->root->doForget($this->namespace, $this->scope, $key);
     }
 
+    public function take(string $key): mixed
+    {
+        return $this->root->doTake($this->namespace, $this->scope, $key);
+    }
+
     public function flushTags(string ...$tags): int
     {
         $merged = array_values(array_unique(array_merge($this->tags, array_values($tags))));

@@ -131,6 +131,11 @@ final class CacheManager implements CacheManagerInterface
         $this->doForget(namespace: '', scope: CacheScope::Tenant, key: $key);
     }
 
+    public function take(string $key): mixed
+    {
+        return $this->doTake(namespace: '', scope: CacheScope::Tenant, key: $key);
+    }
+
     public function flushTags(string ...$tags): int
     {
         $this->boot();
@@ -271,6 +276,26 @@ final class CacheManager implements CacheManagerInterface
             $this->tagIndex->detach($resolved, $entry->tags);
         }
         $this->store->forget($resolved);
+    }
+
+    /**
+     * Internal: take with explicit context (used by ScopedCacheManager). The value is the
+     * caller's only when its own forget removed the entry: another caller that read the
+     * same entry and removed it first gets it instead, and this one gets null.
+     */
+    public function doTake(string $namespace, CacheScope $scope, string $key): mixed
+    {
+        $this->boot();
+        $resolved = $this->resolveKey($key, $namespace, $scope);
+        $entry = $this->store->get($resolved);
+        if ($entry === null || !$this->store->forget($resolved)) {
+            return null;
+        }
+        if (!$entry->tags->isEmpty() && $this->config->tagsEnabled) {
+            $this->tagIndex->detach($resolved, $entry->tags);
+        }
+
+        return $entry->value;
     }
 
     /**
