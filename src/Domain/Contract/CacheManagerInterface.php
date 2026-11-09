@@ -21,6 +21,28 @@ interface CacheManagerInterface
      * written after the take survives it. An unreachable Redis is a miss: null.
      */
     public function take(string $key): mixed;
+
+    /**
+     * Store $value under $key only when nothing live is there, atomically; true
+     * when this call stored it. Of workers adding one key at once, one wins:
+     * a claim or a lock, which get() then put() cannot give. Stores no tags, so
+     * a manager scoped with withTags() refuses it (a tag link written before the
+     * add could delete another holder's entry on a flush, one written after could
+     * be lost).
+     */
+    public function add(string $key, mixed $value, ?int $ttlSeconds = null): bool;
+
+    /**
+     * Remove $key only while its value is $expected (===), atomically; true when
+     * this call removed it. How a lock holder releases: a check then forget()
+     * removed a lock taken by someone else in between. Compare scalars or
+     * arrays: an object comes back from the store as a new instance and is
+     * never === what was put.
+     *
+     * Both are atomic across workers on a shared store (redis); the array
+     * driver is one worker's memory and is atomic only within it.
+     */
+    public function forgetIf(string $key, mixed $expected): bool;
     public function flushTags(string ...$tags): int;
     public function flushNamespace(?string $namespace = null): int;
     public function withNamespace(string $namespace): CacheManagerInterface;

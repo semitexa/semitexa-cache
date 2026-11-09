@@ -91,15 +91,18 @@ final class RedisCacheStore implements CacheStoreInterface
                 return null;
             }
 
+            // Clean up only the bytes read: between the GET and a plain DEL the
+            // key can lapse and another worker add() a lock there, which the DEL
+            // then removed.
             try {
                 $entry = $this->serializer->decode($raw);
             } catch (\Throwable) {
-                $redis->del([$key->asString()]);
+                $redis->eval(self::FORGET_IF_UNCHANGED, 1, $key->asString(), $raw);
                 return null;
             }
 
             if ($entry->isExpiredAt(time())) {
-                $redis->del([$key->asString()]);
+                $redis->eval(self::FORGET_IF_UNCHANGED, 1, $key->asString(), $raw);
                 return null;
             }
 
@@ -164,6 +167,70 @@ final class RedisCacheStore implements CacheStoreInterface
         }
 
         return $entry->isExpiredAt(time()) ? null : $entry;
+    }
+
+    /**
+     * SET NX in one command. Unreachable is a refusal, not a grant: a claim or a
+     * lock that cannot be recorded must not be handed out.
+     */
+    public function add(ResolvedCacheKey $key, CacheEntry $entry): bool
+    {
+        $raw = $this->serializer->encode($entry);
+        try {
+            $result = $this->withConnection(static function (ClientInterface $redis) use ($key, $entry, $raw): mixed {
+                if ($entry->ttlSeconds === null || $entry->ttlSeconds <= 0) {
+                    return $redis->set($key->asString(), $raw, 'NX');
+                }
+                // Expire when the entry does: it is read as expired at
+                // createdAt + ttl (whole seconds), and an EX from now kept the
+                // key up to a second past that, refusing an add() of a slot a
+                // get() already called empty.
+                $ms = (int) ceil((($entry->createdAtEpoch + $entry->ttlSeconds) - microtime(true)) * 1000);
+
+                return $redis->set($key->asString(), $raw, 'PX', max(1, $ms), 'NX');
+            });
+        } catch (ConnectionException | RedisUnavailableException $e) {
+            self::reportUnreachable($e, 'add');
+
+            return false;
+        }
+
+        // OK on a write, null when the key was there.
+        return $result !== null && (string) $result === 'OK';
+    }
+
+    /** DEL only while the key still holds exactly the bytes read: Redis runs it whole. */
+    private const FORGET_IF_UNCHANGED = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0";
+
+    /**
+     * The value is compared decoded, in PHP; the removal is one script that
+     * deletes only while the key still holds the bytes that value came from. A
+     * write in between (another holder's lock) changes them, and nothing goes.
+     */
+    public function forgetIfValue(ResolvedCacheKey $key, mixed $expected): bool
+    {
+        try {
+            return (bool) $this->withConnection(function (ClientInterface $redis) use ($key, $expected): bool {
+                $raw = $redis->get($key->asString());
+                if (!is_string($raw) || $raw === '') {
+                    return false;
+                }
+                try {
+                    $entry = $this->serializer->decode($raw);
+                } catch (\Throwable) {
+                    return false;
+                }
+                if ($entry->isExpiredAt(time()) || $entry->value !== $expected) {
+                    return false;
+                }
+
+                return (int) $redis->eval(self::FORGET_IF_UNCHANGED, 1, $key->asString(), $raw) > 0;
+            });
+        } catch (ConnectionException | RedisUnavailableException $e) {
+            self::reportUnreachable($e, 'forgetIf');
+
+            return false;
+        }
     }
 
     public function forget(ResolvedCacheKey $key): bool

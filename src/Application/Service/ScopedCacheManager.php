@@ -51,6 +51,23 @@ final class ScopedCacheManager implements CacheManagerInterface
         return $this->root->doTake($this->namespace, $this->scope, $key);
     }
 
+    public function add(string $key, mixed $value, ?int $ttlSeconds = null): bool
+    {
+        if ($this->tags !== []) {
+            // A tag link written before the add could delete another holder's
+            // entry on a flush; one written after could be lost. Neither is
+            // what a claim or a lock may risk, so add() stores no tags at all.
+            throw new \LogicException('add() stores no tags; call it on a manager without withTags().');
+        }
+
+        return $this->root->doAdd($this->namespace, $this->scope, $key, $value, $ttlSeconds);
+    }
+
+    public function forgetIf(string $key, mixed $expected): bool
+    {
+        return $this->root->doForgetIf($this->namespace, $this->scope, $key, $expected);
+    }
+
     public function flushTags(string ...$tags): int
     {
         $merged = array_values(array_unique(array_merge($this->tags, array_values($tags))));
