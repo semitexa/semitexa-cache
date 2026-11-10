@@ -93,9 +93,13 @@ final class RedisAddTest extends TestCase
         // Read as expired at createdAt + ttl: with EX 60 from now the key lived
         // up to a second longer, and add() was refused for a slot get() called empty.
         $key = $this->resolved();
-        self::assertTrue($this->worker()->add($key, new CacheEntry('lock', time() - 59, 60, 'json', new TagSet([]))));
+        // Read as expired 10 s from now; EX 60 from now would leave ~60 s, and no
+        // expiry at all gives -1, so both bounds matter.
+        self::assertTrue($this->worker()->add($key, new CacheEntry('lock', time() - 50, 60, 'json', new TagSet([]))));
+        $pttl = (int) $this->redis->pttl($key->asString());
 
-        self::assertLessThanOrEqual(1000, (int) $this->redis->pttl($key->asString()));
+        self::assertGreaterThan(8000, $pttl);
+        self::assertLessThanOrEqual(10000, $pttl);
     }
 
     #[Test]

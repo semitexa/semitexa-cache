@@ -63,10 +63,20 @@ final class CacheAddTest extends TestCase
     }
 
     #[Test]
-    public function the_ttl_rules_are_puts(): void
+    public function a_negative_ttl_is_refused_as_for_put(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('TTL must not be negative.');
         $this->manager()->add('k', 1, -1);
+    }
+
+    #[Test]
+    public function a_forever_ttl_is_refused_unless_allowed_as_for_put(): void
+    {
+        // A permanent lock is the worst outcome a claim or a lock can have.
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('TTL=0 (forever) is not allowed');
+        $this->manager()->add('lock', 'holder-a', 0);
     }
 
     private function manager(): CacheManager

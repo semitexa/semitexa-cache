@@ -206,6 +206,12 @@ final class RedisCacheStore implements CacheStoreInterface
      * The value is compared decoded, in PHP; the removal is one script that
      * deletes only while the key still holds the bytes that value came from. A
      * write in between (another holder's lock) changes them, and nothing goes.
+     *
+     * Unreachable is false, as for add(), and a caller cannot tell it from "not
+     * the holder": a release during an outage leaves the lock until its TTL
+     * (for good with TTL 0 and CACHE_ALLOW_FOREVER on), which is why a lock
+     * should always carry one. The outage itself is logged: first-hand here,
+     * or once by the pool's breaker when it opened.
      */
     public function forgetIfValue(ResolvedCacheKey $key, mixed $expected): bool
     {
