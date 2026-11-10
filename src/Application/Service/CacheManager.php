@@ -136,6 +136,16 @@ final class CacheManager implements CacheManagerInterface
         return $this->doTake(namespace: '', scope: CacheScope::Tenant, key: $key);
     }
 
+    public function add(string $key, mixed $value, ?int $ttlSeconds = null): bool
+    {
+        return $this->doAdd(namespace: '', scope: CacheScope::Tenant, key: $key, value: $value, ttlSeconds: $ttlSeconds);
+    }
+
+    public function forgetIf(string $key, mixed $expected): bool
+    {
+        return $this->doForgetIf(namespace: '', scope: CacheScope::Tenant, key: $key, expected: $expected);
+    }
+
     public function flushTags(string ...$tags): int
     {
         $this->boot();
@@ -276,6 +286,37 @@ final class CacheManager implements CacheManagerInterface
             $this->tagIndex->detach($resolved, $entry->tags);
         }
         $this->store->forget($resolved);
+    }
+
+    /**
+     * Internal: add() with explicit context (used by ScopedCacheManager). The
+     * TTL rules are put()'s; no tags are stored.
+     */
+    public function doAdd(string $namespace, CacheScope $scope, string $key, mixed $value, ?int $ttlSeconds): bool
+    {
+        $this->boot();
+        if ($ttlSeconds !== null && $ttlSeconds < 0) {
+            throw new \InvalidArgumentException('TTL must not be negative.');
+        }
+        if ($ttlSeconds === 0 && !$this->config->allowForever) {
+            throw new \InvalidArgumentException('TTL=0 (forever) is not allowed. Set CACHE_ALLOW_FOREVER=1 to enable.');
+        }
+
+        return $this->store->add($this->resolveKey($key, $namespace, $scope), new CacheEntry(
+            value: $value,
+            createdAtEpoch: time(),
+            ttlSeconds: $ttlSeconds ?? $this->config->defaultTtl,
+            format: 'json',
+            tags: new TagSet([]),
+        ));
+    }
+
+    /** Internal: forgetIf() with explicit context (used by ScopedCacheManager). */
+    public function doForgetIf(string $namespace, CacheScope $scope, string $key, mixed $expected): bool
+    {
+        $this->boot();
+
+        return $this->store->forgetIfValue($this->resolveKey($key, $namespace, $scope), $expected);
     }
 
     /**

@@ -70,6 +70,8 @@ final class CacheReviewFixesTest extends TestCase
             public function get(ResolvedCacheKey $key): ?CacheEntry { return $this->inner->get($key); }
             public function put(ResolvedCacheKey $key, CacheEntry $entry): void { $this->inner->put($key, $entry); }
             public function take(ResolvedCacheKey $key): ?CacheEntry { return $this->inner->take($key); }
+            public function add(ResolvedCacheKey $key, CacheEntry $entry): bool { return $this->inner->add($key, $entry); }
+            public function forgetIfValue(ResolvedCacheKey $key, mixed $expected): bool { return $this->inner->forgetIfValue($key, $expected); }
             public function forget(ResolvedCacheKey $key): bool
             {
                 if ($this->forgetFails) {

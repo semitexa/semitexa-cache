@@ -35,6 +35,28 @@ final class ArrayCacheStore implements CacheStoreInterface
         return $entry;
     }
 
+    /** One worker's memory, and nothing here yields: the check and the write cannot be split. */
+    public function add(ResolvedCacheKey $key, CacheEntry $entry): bool
+    {
+        if ($this->get($key) !== null) {
+            return false;
+        }
+        $this->put($key, $entry);
+
+        return true;
+    }
+
+    public function forgetIfValue(ResolvedCacheKey $key, mixed $expected): bool
+    {
+        $entry = $this->get($key);
+        if ($entry === null || $entry->value !== $expected) {
+            return false;
+        }
+        unset($this->store[$key->asString()]);
+
+        return true;
+    }
+
     public function forget(ResolvedCacheKey $key): bool
     {
         if (!isset($this->store[$key->asString()])) {
